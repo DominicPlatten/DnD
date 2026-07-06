@@ -1,5 +1,5 @@
 import { describe, it, expect } from 'vitest';
-import type { Character, Token } from '../entities';
+import type { Character, Interactable, Token } from '../entities';
 import { createInitialState, type GameState } from '../state';
 import { applyCommand, markOffline, removePlayer } from './reducer';
 
@@ -50,7 +50,7 @@ describe('reconnection', () => {
     s = join(s, 'p2', 'Bob');
     s = applyCommand(
       s,
-      { t: 'createCharacter', draft: { name: 'Bob', raceId: 'elf', visual: { color: '#22c55e', icon: '🏹' }, baseAbilities: { str: 8, dex: 15, con: 12, int: 10, wis: 13, cha: 10 } } },
+      { t: 'createCharacter', draft: { name: 'Bob', raceId: 'elf', classId: 'rogue', visual: { color: '#22c55e', icon: '🏹' }, baseAbilities: { str: 8, dex: 15, con: 12, int: 10, mag: 13, cha: 10 } } },
       { id: 'p2' },
     ).state;
 
@@ -93,7 +93,7 @@ describe('reconnection', () => {
     s = applyCommand(s, { t: 'gm/advancePhase' }, { id: 'p1' }).state;
     s = applyCommand(
       s,
-      { t: 'createCharacter', draft: { name: 'Bob', raceId: 'dwarf', visual: { color: '#22c55e', icon: '🔨' }, baseAbilities: { str: 14, dex: 10, con: 14, int: 8, wis: 12, cha: 10 } } },
+      { t: 'createCharacter', draft: { name: 'Bob', raceId: 'dwarf', classId: 'warrior', visual: { color: '#22c55e', icon: '🔨' }, baseAbilities: { str: 14, dex: 10, con: 14, int: 8, mag: 12, cha: 10 } } },
       { id: 'p2' },
     ).state;
     s = applyCommand(s, { t: 'gm/selectWorld', worldType: 'dungeon', seed: 7 }, { id: 'p1' }).state;
@@ -107,8 +107,9 @@ describe('createCharacter', () => {
   const draft = {
     name: 'Legolas',
     raceId: 'elf',
+    classId: 'rogue',
     visual: { color: '#22c55e', icon: '🏹' },
-    baseAbilities: { str: 8, dex: 15, con: 12, int: 10, wis: 13, cha: 10 },
+    baseAbilities: { str: 8, dex: 15, con: 12, int: 10, mag: 13, cha: 10 },
   } as const;
 
   const twoPlayerGame = () => {
@@ -133,7 +134,7 @@ describe('createCharacter', () => {
   });
 
   it('rejects an illegal point-buy', () => {
-    const cheating = { ...draft, baseAbilities: { str: 18, dex: 18, con: 18, int: 18, wis: 18, cha: 18 } };
+    const cheating = { ...draft, baseAbilities: { str: 18, dex: 18, con: 18, int: 18, mag: 18, cha: 18 } };
     const denied = applyCommand(twoPlayerGame(), { t: 'createCharacter', draft: cheating }, { id: 'p2' });
     expect(denied.error).toBeDefined();
     expect(denied.state.characters['p2']).toBeUndefined();
@@ -160,8 +161,9 @@ describe('world & start', () => {
         draft: {
           name: 'Bob',
           raceId: 'human',
+          classId: 'warrior',
           visual: { color: '#3b82f6', icon: '⚔️' },
-          baseAbilities: { str: 12, dex: 12, con: 12, int: 12, wis: 12, cha: 8 },
+          baseAbilities: { str: 12, dex: 12, con: 12, int: 12, mag: 12, cha: 8 },
         },
       },
       { id: 'p2' },
@@ -292,9 +294,10 @@ describe('GM combat controls', () => {
     ownerId: 'p2',
     name: 'Bob',
     raceId: 'human',
+    classId: 'warrior',
     visual: { color: '#fff', icon: '⚔️' },
     level: 1,
-    abilities: { str: 10, dex: 10, con: 10, int: 10, wis: 10, cha: 10 },
+    abilities: { str: 10, dex: 10, con: 10, int: 10, mag: 10, cha: 10 },
     hp: 12,
     maxHp: 12,
     ac: 10,
@@ -349,9 +352,27 @@ describe('GM combat controls', () => {
   it('spawns an enemy onto a passable tile and adds it to initiative', () => {
     const { state, events } = applyCommand(base(), { t: 'gm/spawnEnemy', enemyId: 'goblin', tokenId: 'e1', at: { x: 1, y: 0 } }, { id: 'p1' });
     expect(state.tokens['e1']?.kind).toBe('enemy');
-    expect(state.tokens['e1']?.hp).toBe(7);
+    expect(state.tokens['e1']?.hp).toBe(7); // normal tier: unscaled
+    expect(state.tokens['e1']?.attack).toBe(0);
     expect(state.initiative?.order).toContain('e1');
     expect(events).toContainEqual({ t: 'enemySpawned', name: 'Goblin' });
+  });
+
+  it('scales a spawned enemy up by tier (boss)', () => {
+    const { state, events } = applyCommand(
+      base(),
+      { t: 'gm/spawnEnemy', enemyId: 'goblin', tokenId: 'b1', at: { x: 1, y: 0 }, tier: 'boss' },
+      { id: 'p1' },
+    );
+    const boss = state.tokens['b1']!;
+    expect(boss.hp).toBe(15); // round(7 * 2.2)
+    expect(boss.maxHp).toBe(15);
+    expect(boss.tier).toBe('boss');
+    expect(boss.name).toBe('Boss Goblin');
+    expect(boss.attack).toBe(2); // max(0, 0 + 2)
+    expect(boss.armor).toBe(2); // max(0, 0 + 2)
+    expect(boss.magicResist).toBe(2); // max(0, 0 + 2)
+    expect(events).toContainEqual({ t: 'enemySpawned', name: 'Boss Goblin' });
   });
 
   it('refuses to spawn onto an occupied tile', () => {
@@ -384,9 +405,10 @@ describe('dice, interaction & the action economy', () => {
     ownerId: id,
     name,
     raceId: 'human',
+    classId: 'warrior',
     visual: { color: '#fff', icon: '⚔️' },
     level: 1,
-    abilities: { str: 10, dex: 10, con: 10, int: 10, wis: 10, cha: 10 },
+    abilities: { str: 10, dex: 10, con: 10, int: 10, mag: 10, cha: 10 },
     hp: 10,
     maxHp: 10,
     ac: 10,
@@ -478,8 +500,8 @@ describe('dice, interaction & the action economy', () => {
 
 describe('battle integration', () => {
   const character: Character = {
-    id: 'p2', ownerId: 'p2', name: 'Bob', raceId: 'human', visual: { color: '#fff', icon: '⚔️' },
-    level: 1, abilities: { str: 16, dex: 12, con: 10, int: 10, wis: 10, cha: 10 },
+    id: 'p2', ownerId: 'p2', name: 'Bob', raceId: 'human', classId: 'warrior', visual: { color: '#fff', icon: '⚔️' },
+    level: 1, abilities: { str: 16, dex: 12, con: 10, int: 10, mag: 10, cha: 10 },
     hp: 40, maxHp: 40, ac: 10, speed: 40, initiative: 1, inventory: [],
   };
   const pcToken: Token = {
@@ -536,5 +558,76 @@ describe('battle integration', () => {
     expect(done.tokens['gob']).toBeUndefined();
     expect(done.initiative!.order).not.toContain('gob');
     expect(done.tokens['p2']).toBeDefined();
+  });
+});
+
+describe('classes & INT skill checks', () => {
+  // A Mage with INT/MAG 16 (both +3 modifiers) on a 3-tile floor.
+  const mage: Character = {
+    id: 'p2', ownerId: 'p2', name: 'Merlin', raceId: 'human', classId: 'mage',
+    visual: { color: '#a855f7', icon: '🔮' }, level: 1,
+    abilities: { str: 8, dex: 10, con: 10, int: 16, mag: 16, cha: 10 },
+    hp: 10, maxHp: 10, ac: 10, speed: 30, initiative: 0, inventory: [],
+  };
+  const mageToken: Token = {
+    id: 'p2', kind: 'pc', name: 'Merlin', visual: { color: '#a855f7', icon: '🔮' },
+    coord: { x: 0, y: 0 }, hp: 10, maxHp: 10, initiative: 0, speed: 30, statuses: [], ownerId: 'p2',
+  };
+  const base = (tokens: Record<string, Token> = {}, interactables: Record<string, Interactable> = {}): GameState => ({
+    ...createInitialState('ABCDE'),
+    phase: 'playing', gmId: 'p1',
+    players: {
+      p1: { id: 'p1', name: 'GM', role: 'gm', connected: true },
+      p2: { id: 'p2', name: 'Merlin', role: 'player', connected: true },
+    },
+    characters: { p2: mage },
+    map: { worldType: 'test', seed: 1, width: 3, height: 1, tiles: ['floor', 'floor', 'floor'], spawnPoints: [{ x: 0, y: 0 }] },
+    tokens: { p2: mageToken, ...tokens },
+    initiative: { order: ['p2'], currentIndex: 0, round: 1 },
+    interactables,
+  });
+
+  it("builds a battle combatant from the player's class (magic power + kit)", () => {
+    const skeleton: Token = {
+      id: 'sk', kind: 'enemy', name: 'Skeleton', visual: { color: '#d1d5db', icon: '💀' },
+      coord: { x: 1, y: 0 }, hp: 13, maxHp: 13, initiative: 2, speed: 30, statuses: [],
+      enemyId: 'skeleton', attack: 1, armor: 3, magicResist: 0,
+    };
+    const { state } = applyCommand(base({ sk: skeleton }), { t: 'interact', targetId: 'sk' }, { id: 'p2', random: 0.5 });
+    const me = state.battle!.combatants['p2']!;
+    expect(me.moves).toContain('firebolt'); // mage kit, not the generic set
+    expect(me.power).toBe(3); // MAG 16 -> +3
+    const foe = state.battle!.combatants['sk']!;
+    expect(foe.armor).toBe(3); // Mage's magic will bypass this...
+    expect(foe.magicResist).toBe(0); // ...and meet no resistance here
+  });
+
+  it('a locked chest needs an INT check: a low roll fails and still spends the action', () => {
+    const chest: Interactable = { id: 'c1', kind: 'chest', coord: { x: 1, y: 0 }, contents: [{ itemId: 'gold', qty: 1 }], looted: false, dc: 15 };
+    // random 0 -> d20 = 1; 1 + INT(+3) = 4 < 15.
+    const { state, events } = applyCommand(base({}, { c1: chest }), { t: 'interact', targetId: 'c1' }, { id: 'p2', random: 0 });
+    expect(state.interactables['c1']!.looted).toBe(false);
+    expect(state.characters['p2']!.inventory).toEqual([]);
+    expect(state.turn.acted).toBe(true);
+    expect(state.lastRoll).toEqual({ sides: 20, value: 1, by: 'Merlin', seq: 1 });
+    expect(events).toContainEqual({ t: 'lockAttempt', by: 'Merlin', target: 'chest', success: false, roll: 1, total: 4, dc: 15 });
+  });
+
+  it('a high roll picks the lock and loots the chest', () => {
+    const chest: Interactable = { id: 'c1', kind: 'chest', coord: { x: 1, y: 0 }, contents: [{ itemId: 'gold', qty: 1 }], looted: false, dc: 15 };
+    // random 0.99 -> d20 = 20; 20 + 3 = 23 >= 15.
+    const { state, events } = applyCommand(base({}, { c1: chest }), { t: 'interact', targetId: 'c1' }, { id: 'p2', random: 0.99 });
+    expect(state.interactables['c1']!.looted).toBe(true);
+    expect(state.characters['p2']!.inventory).toEqual([{ itemId: 'gold', qty: 1 }]);
+    expect(events.some((e) => e.t === 'chestOpened')).toBe(true);
+    expect(events).toContainEqual({ t: 'lockAttempt', by: 'Merlin', target: 'chest', success: true, roll: 20, total: 23, dc: 15 });
+  });
+
+  it('an unlocked door (dc 0) opens with no check', () => {
+    const door: Interactable = { id: 'd1', kind: 'door', coord: { x: 1, y: 0 }, open: false };
+    const { state, events } = applyCommand(base({}, { d1: door }), { t: 'interact', targetId: 'd1' }, { id: 'p2', random: 0 });
+    expect(state.interactables['d1']!.open).toBe(true);
+    expect(events).toContainEqual({ t: 'doorToggled', open: true });
+    expect(events.some((e) => e.t === 'lockAttempt')).toBe(false);
   });
 });

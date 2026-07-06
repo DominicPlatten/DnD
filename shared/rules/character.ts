@@ -1,4 +1,4 @@
-import type { Abilities, Character, CharacterDraft, PlayerId, Race } from '../entities';
+import type { Abilities, Character, CharacterDraft, ClassDef, PlayerId, Race } from '../entities';
 import { ABILITY_KEYS } from '../content/abilities';
 
 /**
@@ -38,7 +38,7 @@ export function isLegalPointBuy(abilities: Abilities): boolean {
 }
 
 export function baseAbilities(): Abilities {
-  return { str: 8, dex: 8, con: 8, int: 8, wis: 8, cha: 8 };
+  return { str: 8, dex: 8, con: 8, int: 8, mag: 8, cha: 8 };
 }
 
 // ---- Derivation --------------------------------------------------------------
@@ -62,10 +62,10 @@ export interface DerivedStats {
   initiative: number;
 }
 
-/** Simplified derivations from final ability scores + race. */
-export function deriveStats(abilities: Abilities, race: Race): DerivedStats {
+/** Simplified derivations from final ability scores + race + class. */
+export function deriveStats(abilities: Abilities, race: Race, classDef: ClassDef): DerivedStats {
   return {
-    maxHp: 10 + abilityMod(abilities.con),
+    maxHp: 10 + abilityMod(abilities.con) + classDef.hpBonus,
     ac: 10 + abilityMod(abilities.dex),
     speed: race.speed,
     initiative: abilityMod(abilities.dex),
@@ -73,14 +73,15 @@ export function deriveStats(abilities: Abilities, race: Race): DerivedStats {
 }
 
 /** Turn a validated draft into a finished, full-HP character. */
-export function buildCharacter(ownerId: PlayerId, draft: CharacterDraft, race: Race): Character {
+export function buildCharacter(ownerId: PlayerId, draft: CharacterDraft, race: Race, classDef: ClassDef): Character {
   const abilities = applyRaceMods(draft.baseAbilities, race);
-  const derived = deriveStats(abilities, race);
+  const derived = deriveStats(abilities, race, classDef);
   return {
     id: ownerId,
     ownerId,
     name: draft.name,
     raceId: race.id,
+    classId: classDef.id,
     visual: draft.visual,
     level: 1,
     abilities,

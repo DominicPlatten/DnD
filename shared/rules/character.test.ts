@@ -1,6 +1,7 @@
 import { describe, it, expect } from 'vitest';
 import type { Abilities, CharacterDraft } from '../entities';
 import { getRace } from '../content/races';
+import { getClass } from '../content/classes';
 import {
   abilityMod,
   applyRaceMods,
@@ -49,7 +50,7 @@ describe('derivation', () => {
   it('derives HP/AC from final scores and speed from race', () => {
     const elf = getRace('elf')!;
     const final = applyRaceMods(scores({ con: 14, dex: 13 }), elf); // dex 13 + 2 = 15
-    const derived = deriveStats(final, elf);
+    const derived = deriveStats(final, elf, getClass('mage')!); // mage: +0 HP bonus
     expect(derived.maxHp).toBe(12); // 10 + con mod (+2)
     expect(derived.ac).toBe(12); //   10 + dex mod (+2 at 15)
     expect(derived.speed).toBe(30);
@@ -62,11 +63,13 @@ describe('buildCharacter', () => {
     const draft: CharacterDraft = {
       name: 'Gimli',
       raceId: 'dwarf',
+      classId: 'warrior',
       visual: { color: '#ef4444', icon: '🔨' },
       baseAbilities: scores({ con: 15, str: 14 }),
     };
-    const character = buildCharacter('p2', draft, getRace('dwarf')!);
+    const character = buildCharacter('p2', draft, getRace('dwarf')!, getClass('warrior')!);
     expect(character.ownerId).toBe('p2');
+    expect(character.classId).toBe('warrior');
     expect(character.abilities.con).toBe(17); // 15 + 2
     expect(character.hp).toBe(character.maxHp);
     expect(character.level).toBe(1);

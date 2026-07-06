@@ -1,5 +1,6 @@
 import { useMemo, useState } from 'react';
 import type { Coord, TokenId } from '@shared/entities';
+import type { EnemyTier } from '@shared/content/enemies';
 import type { Command } from '@shared/protocol/commands';
 import { chebyshev, moveRange, objectBlocks } from '@shared/rules/turns';
 import { isPassable, tileAt } from '@shared/world/types';
@@ -31,6 +32,7 @@ export function PlayScreen({
 
   const [selectedId, setSelectedId] = useState<TokenId | undefined>(undefined);
   const [spawningId, setSpawningId] = useState<string | undefined>(undefined);
+  const [spawnTier, setSpawnTier] = useState<EnemyTier>('normal');
 
   const { map, initiative, turn } = state;
   const tokens = Object.values(state.tokens);
@@ -61,7 +63,7 @@ export function PlayScreen({
   const handleTile = (coord: Coord) => {
     if (isGm) {
       if (spawningId) {
-        send({ t: 'gm/spawnEnemy', enemyId: spawningId, tokenId: genTokenId(), at: coord });
+        send({ t: 'gm/spawnEnemy', enemyId: spawningId, tokenId: genTokenId(), at: coord, tier: spawnTier });
         setSpawningId(undefined);
         return;
       }
@@ -179,6 +181,8 @@ export function PlayScreen({
               onSelect={setSelectedId}
               spawningId={spawningId}
               onArmSpawn={setSpawningId}
+              spawnTier={spawnTier}
+              onSetTier={setSpawnTier}
             />
           )}
 

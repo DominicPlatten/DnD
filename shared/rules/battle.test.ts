@@ -1,7 +1,7 @@
 import { describe, it, expect } from 'vitest';
 import type { Combatant } from '../entities';
 import { getMove } from '../content/moves';
-import { chooseMove, computeDamage, isReadyToResolve, resolveRound, startBattle } from './battle';
+import { attackDamage, chooseMove, isReadyToResolve, resolveRound, startBattle } from './battle';
 
 const strike = getMove('strike')!;
 
@@ -14,8 +14,9 @@ const hero = (over: Partial<Combatant> = {}): Combatant => ({
   hp: 20,
   maxHp: 20,
   speed: 40,
-  attack: 2,
-  defense: 1,
+  power: 2,
+  armor: 1,
+  magicResist: 0,
   guarding: false,
   controllerId: 'p2',
   moves: ['strike', 'heavy', 'guard', 'second-wind', 'flee'],
@@ -31,8 +32,9 @@ const foe = (over: Partial<Combatant> = {}): Combatant => ({
   hp: 7,
   maxHp: 7,
   speed: 30,
-  attack: 2,
-  defense: 0,
+  power: 2,
+  armor: 0,
+  magicResist: 0,
   guarding: false,
   moves: ['strike', 'heavy', 'guard'],
   ...over,
@@ -51,18 +53,28 @@ describe('battle engine', () => {
     expect(chooseMove(battle, 'hero', 'heavy').error).toBeDefined();
   });
 
-  it('computes damage as power + attack - defense, floored at 1', () => {
-    expect(computeDamage(strike, hero({ attack: 2 }), foe({ defense: 0 }))).toBe(8);
-    expect(computeDamage(strike, hero({ attack: 0 }), foe({ defense: 99 }))).toBe(1);
+  it('computes damage as roll + power - armor, floored at 1', () => {
+    expect(attackDamage(strike, hero({ power: 2 }), foe({ armor: 0 }), 4)).toBe(6); // 4 + 2 - 0
+    expect(attackDamage(strike, hero({ power: 0 }), foe({ armor: 99 }), 4)).toBe(1); // floored
   });
 
   it('halves damage against a guarding target', () => {
-    expect(computeDamage(strike, hero({ attack: 2 }), foe({ defense: 0, guarding: true }))).toBe(4);
+    expect(attackDamage(strike, hero({ power: 2 }), foe({ armor: 0, guarding: true }), 4)).toBe(3); // 6 -> ceil(3)
+  });
+
+  it('routes physical damage through armor and magic through magic resist', () => {
+    const firebolt = getMove('firebolt')!;
+    // Physical strike is stopped by armor, ignores magic resist.
+    expect(attackDamage(strike, hero({ power: 2 }), foe({ armor: 5, magicResist: 0 }), 6)).toBe(3); // 6 + 2 - 5
+    // Magic firebolt ignores armor, is stopped by magic resist.
+    expect(attackDamage(firebolt, hero({ power: 2 }), foe({ armor: 5, magicResist: 0 }), 6)).toBe(8); // 6 + 2 - 0
+    expect(attackDamage(firebolt, hero({ power: 2 }), foe({ armor: 0, magicResist: 5 }), 6)).toBe(3); // 6 + 2 - 5
   });
 
   it('resolves rounds until the party defeats the foe, and clears guard each round', () => {
-    let battle = startBattle([hero({ hp: 60, maxHp: 60 }), foe()], 42);
-    for (let i = 0; i < 20 && battle.phase === 'choosing'; i++) {
+    // Foe kept to a single non-guard move so the multi-round loop is guard-free.
+    let battle = startBattle([hero({ hp: 60, maxHp: 60 }), foe({ hp: 30, maxHp: 30, moves: ['strike'] })], 42);
+    for (let i = 0; i < 30 && battle.phase === 'choosing'; i++) {
       battle = chooseMove(battle, 'hero', 'strike').battle;
       battle = resolveRound(battle);
     }
@@ -72,11 +84,20 @@ describe('battle engine', () => {
     expect(battle.round).toBeGreaterThan(1);
   });
 
-  it('heals with Second Wind, capped at max HP', () => {
-    let battle = startBattle([hero({ hp: 5, moves: ['second-wind'] }), foe({ moves: ['guard'] })], 3);
-    battle = chooseMove(battle, 'hero', 'second-wind').battle;
-    battle = resolveRound(battle);
-    expect(battle.combatants['hero']!.hp).toBe(13); // 5 + 8
+  it('heals with Second Wind (1d8 + 2), capped at max HP', () => {
+    // From 5 HP: 1d8 + 2 lands somewhere in 8..15.
+    let low = startBattle([hero({ hp: 5, maxHp: 20, moves: ['second-wind'] }), foe({ moves: ['guard'] })], 3);
+    low = chooseMove(low, 'hero', 'second-wind').battle;
+    low = resolveRound(low);
+    const healed = low.combatants['hero']!.hp;
+    expect(healed).toBeGreaterThanOrEqual(8);
+    expect(healed).toBeLessThanOrEqual(15);
+
+    // From 19/20 HP, any roll caps exactly at max.
+    let capped = startBattle([hero({ hp: 19, maxHp: 20, moves: ['second-wind'] }), foe({ moves: ['guard'] })], 3);
+    capped = chooseMove(capped, 'hero', 'second-wind').battle;
+    capped = resolveRound(capped);
+    expect(capped.combatants['hero']!.hp).toBe(20);
   });
 
   it('ends the battle when the party flees', () => {

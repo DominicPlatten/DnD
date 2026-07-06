@@ -1,9 +1,11 @@
 import type { TokenId } from '@shared/entities';
 import type { Command } from '@shared/protocol/commands';
-import { ENEMIES } from '@shared/content/enemies';
+import { ENEMIES, ENEMY_TIERS, getEnemy, scaleEnemy, type EnemyTier } from '@shared/content/enemies';
 import { STATUSES, getStatus } from '@shared/content/statuses';
 import { ITEMS } from '@shared/content/items';
 import { useGameStore } from '../net/gameStore';
+
+const fmtDelta = (n: number) => (n >= 0 ? `+${n}` : `${n}`);
 
 /**
  * The storyteller's toolkit during play: spawn creatures, and for a selected
@@ -15,14 +17,19 @@ export function GMPanel({
   onSelect,
   spawningId,
   onArmSpawn,
+  spawnTier,
+  onSetTier,
 }: {
   send: (command: Command) => void;
   selectedId?: TokenId;
   onSelect: (id?: TokenId) => void;
   spawningId?: string;
   onArmSpawn: (enemyId?: string) => void;
+  spawnTier: EnemyTier;
+  onSetTier: (tier: EnemyTier) => void;
 }) {
   const token = useGameStore((s) => (selectedId ? s.state?.tokens[selectedId] : undefined));
+  const armed = spawningId ? getEnemy(spawningId) : undefined;
 
   const setHp = (delta: number) => {
     if (token) send({ t: 'gm/setHp', tokenId: token.id, hp: token.hp + delta });
@@ -54,23 +61,50 @@ export function GMPanel({
       {/* Spawn creatures */}
       <div>
         <p className="mb-1 text-xs text-slate-400">Spawn a creature</p>
-        <div className="grid grid-cols-4 gap-1">
-          {ENEMIES.map((enemy) => (
+
+        {/* Strength tier — ramp difficulty from weak fodder to bosses */}
+        <div className="mb-2 grid grid-cols-4 gap-1">
+          {ENEMY_TIERS.map((tier) => (
             <button
-              key={enemy.id}
+              key={tier.id}
               type="button"
-              onClick={() => onArmSpawn(spawningId === enemy.id ? undefined : enemy.id)}
-              title={`${enemy.name} · ${enemy.maxHp} HP`}
-              className={`grid place-items-center rounded-lg border py-1.5 text-lg ${
-                spawningId === enemy.id ? 'border-amber-400 bg-amber-500/20' : 'border-slate-700 hover:bg-slate-800'
+              onClick={() => onSetTier(tier.id)}
+              title={`HP ×${tier.hpMult} · ATK ${fmtDelta(tier.attackDelta)} · DEF ${fmtDelta(tier.defenseDelta)}`}
+              className={`rounded-lg border py-1 text-xs font-semibold ${
+                spawnTier === tier.id
+                  ? 'border-amber-400 bg-amber-500/20 text-amber-200'
+                  : 'border-slate-700 text-slate-300 hover:bg-slate-800'
               }`}
             >
-              {enemy.icon}
+              {tier.badge && `${tier.badge} `}
+              {tier.label}
             </button>
           ))}
         </div>
-        {spawningId && (
-          <p className="mt-1 text-xs text-amber-300">Click a tile to place it, or pick again to cancel.</p>
+
+        <div className="grid grid-cols-4 gap-1">
+          {ENEMIES.map((enemy) => {
+            const scaled = scaleEnemy(enemy, spawnTier);
+            return (
+              <button
+                key={enemy.id}
+                type="button"
+                onClick={() => onArmSpawn(spawningId === enemy.id ? undefined : enemy.id)}
+                title={`${scaled.name} · ${scaled.maxHp} HP · ATK ${scaled.attack} · ARM ${scaled.armor} · RES ${scaled.magicResist}`}
+                className={`grid place-items-center rounded-lg border py-1.5 text-lg ${
+                  spawningId === enemy.id ? 'border-amber-400 bg-amber-500/20' : 'border-slate-700 hover:bg-slate-800'
+                }`}
+              >
+                {enemy.icon}
+              </button>
+            );
+          })}
+        </div>
+        {armed && (
+          <p className="mt-1 text-xs text-amber-300">
+            Placing {scaleEnemy(armed, spawnTier).name} ({scaleEnemy(armed, spawnTier).maxHp} HP) — click a tile, or pick
+            again to cancel.
+          </p>
         )}
       </div>
 

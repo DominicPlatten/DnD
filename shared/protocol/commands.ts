@@ -14,13 +14,14 @@ const AbilitiesSchema = z.object({
   dex: z.number().int(),
   con: z.number().int(),
   int: z.number().int(),
-  wis: z.number().int(),
+  mag: z.number().int(),
   cha: z.number().int(),
 });
 
 const CharacterDraftSchema = z.object({
   name: z.string().trim().min(1).max(24),
   raceId: z.string(),
+  classId: z.string(),
   visual: z.object({ color: z.string(), icon: z.string() }),
   baseAbilities: AbilitiesSchema,
 });
@@ -50,6 +51,7 @@ export const CommandSchema = z.discriminatedUnion('t', [
     enemyId: z.string(),
     tokenId: z.string(),
     at: z.object({ x: z.number().int(), y: z.number().int() }),
+    tier: z.enum(['weak', 'normal', 'elite', 'boss']).optional(),
   }),
   z.object({ t: z.literal('gm/removeToken'), tokenId: z.string() }),
   z.object({ t: z.literal('gm/giveItem'), charId: z.string(), itemId: z.string() }),

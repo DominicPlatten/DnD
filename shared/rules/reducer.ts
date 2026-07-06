@@ -3,10 +3,11 @@ import type { Command } from '../protocol/commands';
 import type { GameEvent } from '../protocol/messages';
 import type { Battle, Coord, Interactable, ItemStack, Player, PlayerId, Token, TokenId } from '../entities';
 import { getRace } from '../content/races';
+import { getClass } from '../content/classes';
 import { isValidColor, isValidIcon } from '../content/visuals';
 import { getStatus } from '../content/statuses';
 import { getItem } from '../content/items';
-import { getEnemy } from '../content/enemies';
+import { getEnemy, scaleEnemy } from '../content/enemies';
 import { abilityMod, buildCharacter, isLegalPointBuy } from './character';
 import {
   chooseMove as chooseBattleMove,
@@ -115,15 +116,17 @@ export function applyCommand(state: GameState, command: Command, sender: Sender)
       if (!player) return reject(state, 'You have not joined this game.');
       if (player.role === 'gm') return reject(state, 'The storyteller does not play a character.');
 
-      const { name, raceId, visual, baseAbilities } = command.draft;
+      const { name, raceId, classId, visual, baseAbilities } = command.draft;
       const race = getRace(raceId);
       if (!race) return reject(state, 'Unknown race.');
+      const classDef = getClass(classId);
+      if (!classDef) return reject(state, 'Unknown class.');
       if (!isLegalPointBuy(baseAbilities)) return reject(state, 'Those ability scores are not a legal build.');
       if (!isValidColor(visual.color) || !isValidIcon(visual.icon)) {
         return reject(state, 'Invalid character appearance.');
       }
 
-      const character = buildCharacter(sender.id, { name, raceId, visual, baseAbilities }, race);
+      const character = buildCharacter(sender.id, { name, raceId, classId, visual, baseAbilities }, race, classDef);
       const firstTime = state.characters[sender.id] === undefined;
       return {
         state: { ...state, characters: { ...state.characters, [sender.id]: character } },
@@ -294,18 +297,23 @@ export function applyCommand(state: GameState, command: Command, sender: Sender)
       if (state.tokens[command.tokenId]) return reject(state, 'That token already exists.');
       const placement = placementError(state.map, state.tokens, state.interactables, command.at);
       if (placement) return reject(state, placement);
+      const scaled = scaleEnemy(def, command.tier ?? 'normal');
       const token: Token = {
         id: command.tokenId,
         kind: 'enemy',
-        name: def.name,
+        name: scaled.name,
         visual: { color: def.color, icon: def.icon },
         coord: command.at,
-        hp: def.maxHp,
-        maxHp: def.maxHp,
+        hp: scaled.maxHp,
+        maxHp: scaled.maxHp,
         initiative: def.initiative,
         speed: def.speed,
         statuses: [],
         enemyId: def.id,
+        attack: scaled.attack,
+        armor: scaled.armor,
+        magicResist: scaled.magicResist,
+        tier: scaled.tier,
       };
       return {
         state: {
@@ -313,7 +321,7 @@ export function applyCommand(state: GameState, command: Command, sender: Sender)
           tokens: { ...state.tokens, [token.id]: token },
           initiative: state.initiative ? appendToInitiative(state.initiative, token.id) : state.initiative,
         },
-        events: [{ t: 'enemySpawned', name: def.name }],
+        events: [{ t: 'enemySpawned', name: scaled.name }],
       };
     }
 
@@ -397,6 +405,28 @@ function mergeInventory(inventory: ItemStack[], additions: ItemStack[]): ItemSta
  * kind decides the effect — a switchboard that new interactable/target kinds
  * (levers, NPCs, trading, ...) slot into. Enemies will route to battle next.
  */
+interface Check {
+  roll: number;
+  total: number;
+  success: boolean;
+}
+
+/** A d20 skill check: 1d20 (from server entropy) + a modifier vs a DC. */
+function d20Check(mod: number, dc: number, entropy: number): Check {
+  const roll = 1 + Math.floor(entropy * 20);
+  const total = roll + mod;
+  return { roll, total, success: total >= dc };
+}
+
+/** A shared dice-display roll so everyone sees the d20 a check produced. */
+function checkRoll(state: GameState, by: string, roll: number): GameState['lastRoll'] {
+  return { sides: 20, value: roll, by, seq: (state.lastRoll?.seq ?? 0) + 1 };
+}
+
+function lockEvent(by: string, target: 'chest' | 'door', check: Check, dc: number): GameEvent {
+  return { t: 'lockAttempt', by, target, success: check.success, roll: check.roll, total: check.total, dc };
+}
+
 function resolveInteraction(state: GameState, actor: Token, targetId: string, entropy: number): ReduceResult {
   const spent = { ...state.turn, acted: true };
   const interactable = state.interactables[targetId];
@@ -407,37 +437,56 @@ function resolveInteraction(state: GameState, actor: Token, targetId: string, en
   if (chebyshev(actor.coord, targetCoord) > 1) return reject(state, 'You are too far away.');
 
   if (interactable) {
+    const character = state.characters[actor.id];
+    const intMod = character ? abilityMod(character.abilities.int) : 0;
+
     if (interactable.kind === 'chest') {
       if (interactable.looted) return reject(state, 'The chest is already empty.');
-      const character = state.characters[actor.id];
       if (!character) return reject(state, 'Only characters can carry loot.');
+
+      // A locked chest needs an INT check to force open; failure still spends the action.
+      const dc = interactable.dc ?? 0;
+      const check = dc > 0 ? d20Check(intMod, dc, entropy) : null;
+      const lastRoll = check ? checkRoll(state, actor.name, check.roll) : state.lastRoll;
+      const lockEvents: GameEvent[] = check ? [lockEvent(actor.name, 'chest', check, dc)] : [];
+      if (check && !check.success) {
+        return { state: { ...state, turn: spent, lastRoll }, events: lockEvents };
+      }
+
       const contents = interactable.contents ?? [];
       const items = contents.map((s) => getItem(s.itemId)?.name ?? s.itemId);
       return {
         state: {
           ...state,
           turn: spent,
+          lastRoll,
           characters: {
             ...state.characters,
             [character.id]: { ...character, inventory: mergeInventory(character.inventory, contents) },
           },
-          interactables: {
-            ...state.interactables,
-            [interactable.id]: { ...interactable, looted: true, contents: [] },
-          },
+          interactables: { ...state.interactables, [interactable.id]: { ...interactable, looted: true, contents: [] } },
         },
-        events: [{ t: 'chestOpened', by: actor.name, items }],
+        events: [...lockEvents, { t: 'chestOpened', by: actor.name, items }],
       };
     }
-    // door: toggle open/closed
-    const open = !interactable.open;
+
+    // door: closing an open door is free; forcing a locked one open needs an INT check.
+    if (interactable.open) {
+      return {
+        state: { ...state, turn: spent, interactables: { ...state.interactables, [interactable.id]: { ...interactable, open: false } } },
+        events: [{ t: 'doorToggled', open: false }],
+      };
+    }
+    const dc = interactable.dc ?? 0;
+    const check = dc > 0 ? d20Check(intMod, dc, entropy) : null;
+    const lastRoll = check ? checkRoll(state, actor.name, check.roll) : state.lastRoll;
+    const lockEvents: GameEvent[] = check ? [lockEvent(actor.name, 'door', check, dc)] : [];
+    if (check && !check.success) {
+      return { state: { ...state, turn: spent, lastRoll }, events: lockEvents };
+    }
     return {
-      state: {
-        ...state,
-        turn: spent,
-        interactables: { ...state.interactables, [interactable.id]: { ...interactable, open } },
-      },
-      events: [{ t: 'doorToggled', open }],
+      state: { ...state, turn: spent, lastRoll, interactables: { ...state.interactables, [interactable.id]: { ...interactable, open: true } } },
+      events: [...lockEvents, { t: 'doorToggled', open: true }],
     };
   }
 
@@ -446,9 +495,23 @@ function resolveInteraction(state: GameState, actor: Token, targetId: string, en
     if (targetToken.kind === 'enemy') {
       const character = state.characters[actor.id];
       if (!character) return reject(state, 'Only characters can fight.');
+      const classDef = getClass(character.classId);
+      if (!classDef) return reject(state, 'Your class is unknown.');
       const def = targetToken.enemyId ? getEnemy(targetToken.enemyId) : undefined;
-      const party = partyCombatant(actor, abilityMod(character.abilities.str), abilityMod(character.abilities.dex));
-      const foe = foeCombatant(targetToken, def?.attack ?? 2, def?.defense ?? 0);
+      // Offense scales off the class's primary ability; DEX shrugs off blows, MAG wards spells.
+      const party = partyCombatant(
+        actor,
+        abilityMod(character.abilities[classDef.primary]),
+        abilityMod(character.abilities.dex),
+        abilityMod(character.abilities.mag),
+        classDef.moves,
+      );
+      const foe = foeCombatant(
+        targetToken,
+        targetToken.attack ?? def?.attack ?? 1,
+        targetToken.armor ?? def?.armor ?? 0,
+        targetToken.magicResist ?? def?.magicResist ?? 0,
+      );
       const seed = (Math.floor(entropy * 0x7fffffff) ^ 0x51ed270b) >>> 0;
       return {
         state: { ...state, turn: spent, battle: startBattle([party, foe], seed) },

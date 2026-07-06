@@ -16,6 +16,7 @@ export type GameEvent =
   | { t: 'diceRolled'; sides: number; value: number; by: string }
   | { t: 'chestOpened'; by: string; items: string[] }
   | { t: 'doorToggled'; open: boolean }
+  | { t: 'lockAttempt'; by: string; target: 'chest' | 'door'; success: boolean; roll: number; total: number; dc: number }
   | { t: 'greeted'; from: string; to: string }
   | { t: 'battleStarted'; foe: string }
   | { t: 'battleEnded'; outcome: string }

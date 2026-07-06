@@ -44,12 +44,14 @@ export function placeInteractables(
       coord,
       contents: [lootStack(), lootStack()],
       looted: false,
+      // First chest is free; the rest are locked (an INT check to force open).
+      dc: i === 0 ? 0 : randInt(rng, 10, 13),
     };
   }
 
   const doorCoord = take();
   if (doorCoord) {
-    result['door-0'] = { id: 'door-0', kind: 'door', coord: doorCoord, open: false };
+    result['door-0'] = { id: 'door-0', kind: 'door', coord: doorCoord, open: false, dc: randInt(rng, 9, 12) };
   }
 
   return result;

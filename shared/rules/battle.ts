@@ -1,10 +1,32 @@
 import type { Battle, Combatant, Token } from '../entities';
-import { getMove, PARTY_MOVES, ENEMY_MOVES, type MoveDef } from '../content/moves';
+import { getMove, ENEMY_MOVES, type MoveDef } from '../content/moves';
 import { makeRng } from '../world/rng';
 
-/** Damage for a landed attack: power + attack - defense (min 1), halved if guarded. */
-export function computeDamage(move: MoveDef, attacker: Combatant, defender: Combatant): number {
-  const dmg = Math.max(1, move.power + attacker.attack - defender.defense);
+/** Roll `count` dice of `sides` each and sum them. */
+export function rollDice(rng: () => number, count: number, sides: number): number {
+  let sum = 0;
+  for (let i = 0; i < count; i++) sum += 1 + Math.floor(rng() * sides);
+  return sum;
+}
+
+/** Roll a move's damage/heal dice (0 for moves with no dice, e.g. Guard). */
+export function rollMove(move: MoveDef, rng: () => number): number {
+  return move.dice ? rollDice(rng, move.dice.count, move.dice.sides) : 0;
+}
+
+/** The defense that resists a move: magic resist for magic attacks, armor otherwise. */
+export function resistTo(move: MoveDef, defender: Combatant): number {
+  return move.type === 'magic' ? defender.magicResist : defender.armor;
+}
+
+/** Damage before a guard reduction: dice roll + attacker power + bonus − the relevant resist (min 1). */
+export function rawDamage(move: MoveDef, attacker: Combatant, defender: Combatant, roll: number): number {
+  return Math.max(1, roll + attacker.power + (move.bonus ?? 0) - resistTo(move, defender));
+}
+
+/** Final damage for a landed attack given its dice `roll`, halved if the target is guarding. */
+export function attackDamage(move: MoveDef, attacker: Combatant, defender: Combatant, roll: number): number {
+  const dmg = rawDamage(move, attacker, defender, roll);
   return defender.guarding ? Math.ceil(dmg / 2) : dmg;
 }
 
@@ -15,7 +37,13 @@ export function computeDamage(move: MoveDef, attacker: Combatant, defender: Comb
  * more combatants — the resolver already loops over all of them.
  */
 
-export function partyCombatant(token: Token, attack: number, defense: number): Combatant {
+export function partyCombatant(
+  token: Token,
+  power: number,
+  armor: number,
+  magicResist: number,
+  moves: string[],
+): Combatant {
   return {
     id: token.id,
     tokenId: token.id,
@@ -25,15 +53,16 @@ export function partyCombatant(token: Token, attack: number, defense: number): C
     hp: token.hp,
     maxHp: token.maxHp,
     speed: token.speed,
-    attack,
-    defense,
+    power,
+    armor,
+    magicResist,
     guarding: false,
     controllerId: token.ownerId,
-    moves: PARTY_MOVES,
+    moves,
   };
 }
 
-export function foeCombatant(token: Token, attack: number, defense: number): Combatant {
+export function foeCombatant(token: Token, power: number, armor: number, magicResist: number): Combatant {
   return {
     id: token.id,
     tokenId: token.id,
@@ -43,8 +72,9 @@ export function foeCombatant(token: Token, attack: number, defense: number): Com
     hp: token.hp,
     maxHp: token.maxHp,
     speed: token.speed,
-    attack,
-    defense,
+    power,
+    armor,
+    magicResist,
     guarding: false,
     moves: ENEMY_MOVES,
   };
@@ -125,9 +155,12 @@ export function resolveRound(battle: Battle): Battle {
       continue;
     }
     if (move.kind === 'heal') {
+      const roll = rollMove(move, rng);
+      const healed = roll + (move.bonus ?? 0);
       const before = actor.hp;
-      actor.hp = Math.min(actor.maxHp, actor.hp + move.power);
-      log.push(`${actor.name} uses ${move.name} and recovers ${actor.hp - before} HP.`);
+      actor.hp = Math.min(actor.maxHp, actor.hp + healed);
+      const bonus = move.bonus ? ` + ${move.bonus}` : '';
+      log.push(`${actor.name} uses ${move.name} — 🎲 ${roll}${bonus} = ${actor.hp - before} HP recovered.`);
       continue;
     }
     if (move.kind === 'flee') {
@@ -139,17 +172,21 @@ export function resolveRound(battle: Battle): Battle {
       continue;
     }
 
-    // attack
+    // attack: roll to hit, then roll for strength (dice + attack − defense)
     const target = Object.values(combatants).find((c) => c.side !== actor.side && alive(c));
     if (!target) continue;
     if (rng() * 100 >= move.accuracy) {
       log.push(`${actor.name} uses ${move.name}, but misses!`);
       continue;
     }
-    const dmg = computeDamage(move, actor, target);
+    const roll = rollMove(move, rng);
+    const dmg = attackDamage(move, actor, target, roll);
     target.hp = Math.max(0, target.hp - dmg);
+    const resistLabel = move.type === 'magic' ? 'RES' : 'ARM';
+    const guarded = target.guarding ? ' (guarded)' : '';
     log.push(
-      `${actor.name} uses ${move.name} for ${dmg} damage.` + (target.hp <= 0 ? ` ${target.name} is defeated!` : ''),
+      `${actor.name} uses ${move.name} — 🎲 ${roll} + ${actor.power} PWR − ${resistTo(move, target)} ${resistLabel} = ${dmg} dmg${guarded}.` +
+        (target.hp <= 0 ? ` ${target.name} is defeated!` : ''),
     );
   }
 

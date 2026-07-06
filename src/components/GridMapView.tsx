@@ -1,10 +1,12 @@
 import type { Coord, GridMap, Interactable, TerrainKind, Token, TokenId } from '@shared/entities';
 import { getStatus } from '@shared/content/statuses';
+import { getTier } from '@shared/content/enemies';
 import { CharacterToken } from './CharacterToken';
 
 function interactableIcon(o: Interactable): string {
-  if (o.kind === 'chest') return o.looted ? '📭' : '🧰';
-  return o.open ? '🔓' : '🚪';
+  const locked = (o.dc ?? 0) > 0;
+  if (o.kind === 'chest') return o.looted ? '📭' : locked ? '🔒' : '🧰';
+  return o.open ? '🔓' : locked ? '🔒' : '🚪';
 }
 
 const TERRAIN_COLORS: Record<TerrainKind, string> = {
@@ -128,6 +130,15 @@ export function GridMapView({
                 </button>
               ) : (
                 <div className={`rounded-full ${ring}`}>{inner}</div>
+              )}
+
+              {token.tier && token.tier !== 'normal' && (
+                <div
+                  className="pointer-events-none absolute -top-1 left-0 text-[10px] leading-none"
+                  title={getTier(token.tier).label}
+                >
+                  {getTier(token.tier).badge}
+                </div>
               )}
 
               {token.statuses.length > 0 && (

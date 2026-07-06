@@ -10,7 +10,7 @@ export const RACES: readonly Race[] = [
     id: 'human',
     name: 'Human',
     blurb: 'Adaptable and ambitious. A little better at everything.',
-    abilityMods: { str: 1, dex: 1, con: 1, int: 1, wis: 1, cha: 1 },
+    abilityMods: { str: 1, dex: 1, con: 1, int: 1, mag: 1, cha: 1 },
     speed: 30,
   },
   {

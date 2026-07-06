@@ -3,6 +3,7 @@
  * and the React client. Phase 0 only needs players; characters, tokens, maps,
  * enemies and items get added here in later phases.
  */
+import type { EnemyTier } from './content/enemies';
 
 export type PlayerId = string;
 
@@ -17,8 +18,11 @@ export interface Player {
 
 // ---- Characters --------------------------------------------------------------
 
-/** The six classic D&D abilities. */
-export type AbilityKey = 'str' | 'dex' | 'con' | 'int' | 'wis' | 'cha';
+/**
+ * The six abilities. `mag` (Magic) replaces classic Wisdom: it powers magical
+ * attacks and wards. STR/DEX/CON/INT/CHA keep their usual meaning.
+ */
+export type AbilityKey = 'str' | 'dex' | 'con' | 'int' | 'mag' | 'cha';
 export type Abilities = Record<AbilityKey, number>;
 
 export type RaceId = string;
@@ -31,6 +35,30 @@ export interface Race {
   abilityMods: Partial<Abilities>;
   speed: number;
 }
+
+export type ClassId = string;
+
+/**
+ * A character class: its move kit and which ability powers its attacks. The
+ * registry lives in content/classes; the reducer validates the chosen id.
+ */
+export interface ClassDef {
+  id: ClassId;
+  name: string;
+  icon: string;
+  blurb: string;
+  /** Ability whose modifier scales this class's attack/heal strength in battle. */
+  primary: AbilityKey;
+  /** Whether this class's attacks are resisted by armor (physical) or magic resist (magic). */
+  damageType: DamageType;
+  /** Battle move kit (ids into content/moves). */
+  moves: string[];
+  /** Flat HP added on top of the CON-derived base, so martials are sturdier. */
+  hpBonus: number;
+}
+
+/** Physical damage is reduced by armor; magic damage by magic resist. */
+export type DamageType = 'physical' | 'magic';
 
 /** A token's look: a color + an emoji, both chosen from preset sets. */
 export interface CharacterVisual {
@@ -51,6 +79,7 @@ export interface ItemStack {
 export interface CharacterDraft {
   name: string;
   raceId: RaceId;
+  classId: ClassId;
   visual: CharacterVisual;
   baseAbilities: Abilities;
 }
@@ -61,6 +90,7 @@ export interface Character {
   ownerId: PlayerId;
   name: string;
   raceId: RaceId;
+  classId: ClassId;
   visual: CharacterVisual;
   level: number;
   /** Final scores: point-buy base + racial mods. */
@@ -117,6 +147,14 @@ export interface Token {
   ownerId?: PlayerId;
   /** For enemy tokens: which bestiary preset they came from (battle stats). */
   enemyId?: string;
+  /** Enemy combat stats after tier scaling (set at spawn). PCs derive theirs from abilities. */
+  attack?: number;
+  /** Physical damage reduction (enemies). */
+  armor?: number;
+  /** Magic damage reduction (enemies). */
+  magicResist?: number;
+  /** Difficulty tier of a spawned enemy; drives the board badge. */
+  tier?: EnemyTier;
 }
 
 /** Turn order for the current encounter. */
@@ -157,8 +195,12 @@ export interface Combatant {
   hp: number;
   maxHp: number;
   speed: number;
-  attack: number;
-  defense: number;
+  /** Offensive modifier added to a move's dice (the class's primary-stat mod for PCs). */
+  power: number;
+  /** Physical damage reduction. */
+  armor: number;
+  /** Magic damage reduction. */
+  magicResist: number;
   /** True for the round in which this fighter chose Guard. */
   guarding: boolean;
   /** Which player picks this fighter's moves; undefined = AI-controlled. */
@@ -192,4 +234,6 @@ export interface Interactable {
   looted?: boolean;
   /** door: whether it's open (open doors are passable). */
   open?: boolean;
+  /** Lock difficulty: an INT check (d20 + INT mod) must meet this to open. 0/undefined = unlocked. */
+  dc?: number;
 }

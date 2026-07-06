@@ -101,6 +101,8 @@ export function LobbyScreen({
                 {event.t === 'diceRolled' && `${event.by} rolled a d${event.sides}: ${event.value}.`}
                 {event.t === 'chestOpened' && `${event.by} opened a chest${event.items.length ? ` (${event.items.join(', ')})` : ''}.`}
                 {event.t === 'doorToggled' && `A door was ${event.open ? 'opened' : 'closed'}.`}
+                {event.t === 'lockAttempt' &&
+                  `${event.by} ${event.success ? 'picked' : 'failed'} a ${event.target} lock (🎲 ${event.roll}+INT = ${event.total} vs DC ${event.dc}).`}
                 {event.t === 'greeted' && `${event.from} greets ${event.to}.`}
                 {event.t === 'battleStarted' && `A battle with a ${event.foe} begins!`}
                 {event.t === 'battleEnded' && event.outcome}

@@ -2,6 +2,7 @@ import { useState } from 'react';
 import type { Abilities, AbilityKey, Character, Race } from '@shared/entities';
 import type { Command } from '@shared/protocol/commands';
 import { RACES, getRace } from '@shared/content/races';
+import { CLASSES, getClass } from '@shared/content/classes';
 import { TOKEN_COLORS, TOKEN_ICONS } from '@shared/content/visuals';
 import { ABILITY_KEYS, ABILITY_NAMES } from '@shared/content/abilities';
 import {
@@ -32,6 +33,7 @@ export function CharacterCreateScreen({ send }: { send: (command: Command) => vo
   const [editing, setEditing] = useState(existing === undefined);
   const [name, setName] = useState(existing?.name ?? '');
   const [raceId, setRaceId] = useState(existing?.raceId ?? RACES[0]!.id);
+  const [classId, setClassId] = useState(existing?.classId ?? CLASSES[0]!.id);
   const [color, setColor] = useState<string>(existing?.visual.color ?? TOKEN_COLORS[0]);
   const [icon, setIcon] = useState<string>(existing?.visual.icon ?? TOKEN_ICONS[0]);
   const [base, setBase] = useState<Abilities>(() => {
@@ -40,8 +42,9 @@ export function CharacterCreateScreen({ send }: { send: (command: Command) => vo
   });
 
   const race = getRace(raceId) ?? RACES[0]!;
+  const classDef = getClass(classId) ?? CLASSES[0]!;
   const finalAbilities = applyRaceMods(base, race);
-  const derived = deriveStats(finalAbilities, race);
+  const derived = deriveStats(finalAbilities, race, classDef);
   const spent = totalPointBuyCost(base) ?? 0;
   const remaining = POINT_BUY_BUDGET - spent;
 
@@ -59,7 +62,7 @@ export function CharacterCreateScreen({ send }: { send: (command: Command) => vo
   const submit = () => {
     const trimmed = name.trim();
     if (!trimmed) return;
-    send({ t: 'createCharacter', draft: { name: trimmed, raceId, visual: { color, icon }, baseAbilities: base } });
+    send({ t: 'createCharacter', draft: { name: trimmed, raceId, classId, visual: { color, icon }, baseAbilities: base } });
     setEditing(false);
   };
 
@@ -159,6 +162,31 @@ export function CharacterCreateScreen({ send }: { send: (command: Command) => vo
         </div>
       </section>
 
+      {/* Class */}
+      <section className="mt-6">
+        <h2 className="mb-2 text-sm font-semibold uppercase tracking-wide text-slate-400">Class</h2>
+        <div className="grid grid-cols-1 gap-2 sm:grid-cols-3">
+          {CLASSES.map((c) => (
+            <button
+              key={c.id}
+              type="button"
+              onClick={() => setClassId(c.id)}
+              className={`rounded-lg border p-3 text-left transition ${
+                classId === c.id ? 'border-indigo-500 bg-slate-800' : 'border-slate-700 hover:bg-slate-800/60'
+              }`}
+            >
+              <div className="font-semibold">
+                {c.icon} {c.name}
+              </div>
+              <div className="mt-0.5 text-xs text-slate-400">{c.blurb}</div>
+              <div className="mt-1 text-xs font-medium text-indigo-300">
+                {ABILITY_NAMES[c.primary]} · {c.damageType} attacks
+              </div>
+            </button>
+          ))}
+        </div>
+      </section>
+
       {/* Abilities (point-buy) */}
       <section className="mt-6">
         <div className="mb-2 flex items-center justify-between">
@@ -174,7 +202,14 @@ export function CharacterCreateScreen({ send }: { send: (command: Command) => vo
             const canInc = base[key] < ABILITY_MAX && (totalPointBuyCost({ ...base, [key]: base[key] + 1 }) ?? 99) <= POINT_BUY_BUDGET;
             return (
               <div key={key} className="flex items-center gap-3 rounded-lg border border-slate-800 bg-slate-900/60 px-3 py-2">
-                <span className="w-28 text-sm font-medium">{ABILITY_NAMES[key]}</span>
+                <span className="w-28 text-sm font-medium">
+                  {ABILITY_NAMES[key]}
+                  {key === classDef.primary && (
+                    <span className="ml-1 text-[10px] text-indigo-400" title="Your class's primary ability">
+                      ★
+                    </span>
+                  )}
+                </span>
                 <button type="button" disabled={!canDec} onClick={() => adjust(key, -1)} className="h-7 w-7 rounded border border-slate-600 disabled:opacity-30">−</button>
                 <span className="w-6 text-center tabular-nums">{base[key]}</span>
                 <button type="button" disabled={!canInc} onClick={() => adjust(key, 1)} className="h-7 w-7 rounded border border-slate-600 disabled:opacity-30">+</button>
@@ -220,6 +255,7 @@ function Stat({ label, value }: { label: string; value: number | string }) {
 /** Compact read-only card, reused on the ready screen. */
 export function CharacterCard({ character }: { character: Character }) {
   const race = getRace(character.raceId);
+  const classDef = getClass(character.classId);
   return (
     <div className="rounded-xl border border-slate-800 bg-slate-900/60 p-4">
       <div className="flex items-center gap-3">
@@ -227,7 +263,7 @@ export function CharacterCard({ character }: { character: Character }) {
         <div>
           <div className="font-semibold">{character.name}</div>
           <div className="text-xs text-slate-400">
-            {race?.name ?? character.raceId} · Level {character.level}
+            {race?.name ?? character.raceId} {classDef?.name ?? character.classId} · Level {character.level}
           </div>
         </div>
         <div className="ml-auto text-right text-sm">

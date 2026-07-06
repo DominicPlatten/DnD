@@ -1,6 +1,6 @@
 import type { Combatant } from '@shared/entities';
 import type { Command } from '@shared/protocol/commands';
-import { getMove } from '@shared/content/moves';
+import { getMove, moveFormula } from '@shared/content/moves';
 import { useGameStore } from '../net/gameStore';
 import { CharacterToken } from '../components/CharacterToken';
 
@@ -98,6 +98,12 @@ export function BattleScreen({ send }: { send: (command: Command) => void }) {
                         {move.icon} {move.name}
                       </div>
                       <div className="text-xs text-slate-400">{move.blurb}</div>
+                      {moveFormula(move) && (
+                        <div className="mt-0.5 font-mono text-[11px] text-indigo-300">
+                          🎲 {moveFormula(move)}
+                          {move.kind === 'attack' && move.type ? ` · ${move.type}` : ''}
+                        </div>
+                      )}
                     </button>
                   );
                 })}
@@ -131,6 +137,9 @@ function CombatantCard({ c, align }: { c: Combatant; align: 'start' | 'end' }) {
       </div>
       <div className="text-xs tabular-nums text-slate-400">
         {c.hp}/{c.maxHp} HP
+      </div>
+      <div className="text-[11px] tabular-nums text-slate-500">
+        PWR {c.power} · ARM {c.armor} · RES {c.magicResist}
       </div>
     </div>
   );
