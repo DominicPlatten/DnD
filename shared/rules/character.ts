@@ -91,5 +91,6 @@ export function buildCharacter(ownerId: PlayerId, draft: CharacterDraft, race: R
     speed: derived.speed,
     initiative: derived.initiative,
     inventory: [],
+    notes: [],
   };
 }

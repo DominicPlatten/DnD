@@ -4,7 +4,6 @@ import { LobbyScreen } from './screens/LobbyScreen';
 import { CharacterCreateScreen } from './screens/CharacterCreateScreen';
 import { SetupScreen } from './screens/SetupScreen';
 import { PlayScreen } from './screens/PlayScreen';
-import { BattleScreen } from './screens/BattleScreen';
 import type { Session } from './App';
 
 /**
@@ -43,7 +42,7 @@ export function GameRoot({ session, onLeave }: { session: Session; onLeave: () =
       );
 
     case 'playing':
-      return state.battle ? <BattleScreen send={send} /> : <PlayScreen send={send} onLeave={handleLeave} />;
+      return <PlayScreen send={send} onLeave={handleLeave} />;
 
     case 'lobby':
     case 'ended':

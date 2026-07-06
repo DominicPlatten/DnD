@@ -1,38 +1,75 @@
+import { useState } from 'react';
 import type { TokenId } from '@shared/entities';
 import type { Command } from '@shared/protocol/commands';
-import { ENEMIES, ENEMY_TIERS, getEnemy, scaleEnemy, type EnemyTier } from '@shared/content/enemies';
+import { SPRITE_LIBRARY, type SpriteEntry } from '@shared/content/sceneObjects';
 import { STATUSES, getStatus } from '@shared/content/statuses';
 import { ITEMS } from '@shared/content/items';
 import { useGameStore } from '../net/gameStore';
 
-const fmtDelta = (n: number) => (n >= 0 ? `+${n}` : `${n}`);
+export interface ArmedObject {
+  sprite: string;
+  label: string;
+  blocksMovement: boolean;
+  collectible: boolean;
+  description: string;
+  statusEffects: { apply: string[]; remove: string[] };
+}
 
 /**
- * The storyteller's toolkit during play: spawn creatures, and for a selected
- * token adjust HP, toggle conditions, remove it, or (for a PC) hand over items.
+ * The storyteller's toolkit during play: place scene objects, narrate player
+ * interactions, and manage PC tokens (HP, conditions, items).
  */
 export function GMPanel({
   send,
   selectedId,
-  onSelect,
-  spawningId,
-  onArmSpawn,
-  spawnTier,
-  onSetTier,
+  armedObject,
+  onArmObject,
 }: {
   send: (command: Command) => void;
   selectedId?: TokenId;
-  onSelect: (id?: TokenId) => void;
-  spawningId?: string;
-  onArmSpawn: (enemyId?: string) => void;
-  spawnTier: EnemyTier;
-  onSetTier: (tier: EnemyTier) => void;
+  armedObject?: ArmedObject;
+  onArmObject: (obj?: ArmedObject) => void;
 }) {
-  const token = useGameStore((s) => (selectedId ? s.state?.tokens[selectedId] : undefined));
-  const armed = spawningId ? getEnemy(spawningId) : undefined;
+  const state = useGameStore((s) => s.state)!;
+  const token = selectedId ? state.tokens[selectedId] : undefined;
+  const pendingInteraction = state.pendingInteraction;
+  const pendingObj = pendingInteraction ? state.sceneObjects[pendingInteraction.objectId] : undefined;
+  const pendingPlayer = pendingInteraction ? state.players[pendingInteraction.playerId] : undefined;
+
+  const [narrateText, setNarrateText] = useState('');
+  const [activeCategory, setActiveCategory] = useState(0);
+
+  const narrate = (collect: boolean) => {
+    send({ t: 'gm/narrateObject', text: narrateText.trim(), collect });
+    setNarrateText('');
+  };
 
   const setHp = (delta: number) => {
     if (token) send({ t: 'gm/setHp', tokenId: token.id, hp: token.hp + delta });
+  };
+
+  const armSprite = (sprite: SpriteEntry) => {
+    if (armedObject?.sprite === sprite.emoji) {
+      onArmObject(undefined);
+    } else {
+      onArmObject({ sprite: sprite.emoji, label: sprite.label, blocksMovement: false, collectible: false, description: '', statusEffects: { apply: [], remove: [] } });
+    }
+  };
+
+  const toggleStatusEffect = (type: 'apply' | 'remove', statusId: string) => {
+    if (!armedObject) return;
+    const other = type === 'apply' ? 'remove' : 'apply';
+    const current = armedObject.statusEffects[type];
+    const hasIt = current.includes(statusId);
+    onArmObject({
+      ...armedObject,
+      statusEffects: {
+        ...armedObject.statusEffects,
+        // Remove from opposite list if toggling on, toggle in current list
+        [other]: armedObject.statusEffects[other].filter((s) => s !== statusId),
+        [type]: hasIt ? current.filter((s) => s !== statusId) : [...current, statusId],
+      },
+    });
   };
 
   return (
@@ -58,64 +95,180 @@ export function GMPanel({
 
       <div className="border-t border-slate-800" />
 
-      {/* Spawn creatures */}
-      <div>
-        <p className="mb-1 text-xs text-slate-400">Spawn a creature</p>
-
-        {/* Strength tier — ramp difficulty from weak fodder to bosses */}
-        <div className="mb-2 grid grid-cols-4 gap-1">
-          {ENEMY_TIERS.map((tier) => (
+      {/* Narration panel — takes priority when a player is waiting */}
+      {pendingInteraction && pendingObj ? (
+        <div className="space-y-2 rounded-lg border border-indigo-500/40 bg-indigo-500/5 p-3">
+          <p className="text-sm font-semibold text-indigo-300">
+            <span className="text-white">{pendingPlayer?.name ?? 'A player'}</span> touches{' '}
+            <span className="text-white">{pendingObj.sprite} {pendingObj.label}</span>
+          </p>
+          <textarea
+            value={narrateText}
+            onChange={(e) => setNarrateText(e.target.value)}
+            placeholder="What do they discover…"
+            rows={3}
+            className="w-full resize-none rounded-lg border border-slate-700 bg-slate-900 p-2 text-sm text-slate-200 placeholder-slate-500 focus:border-indigo-500 focus:outline-none"
+          />
+          <div className="flex gap-2">
             <button
-              key={tier.id}
               type="button"
-              onClick={() => onSetTier(tier.id)}
-              title={`HP ×${tier.hpMult} · ATK ${fmtDelta(tier.attackDelta)} · DEF ${fmtDelta(tier.defenseDelta)}`}
-              className={`rounded-lg border py-1 text-xs font-semibold ${
-                spawnTier === tier.id
-                  ? 'border-amber-400 bg-amber-500/20 text-amber-200'
-                  : 'border-slate-700 text-slate-300 hover:bg-slate-800'
-              }`}
+              onClick={() => narrate(false)}
+              disabled={narrateText.trim().length === 0}
+              className="flex-1 rounded-lg border border-indigo-500/50 py-1.5 text-sm font-semibold text-indigo-300 hover:bg-indigo-500/10 disabled:opacity-40"
             >
-              {tier.badge && `${tier.badge} `}
-              {tier.label}
+              Narrate
             </button>
-          ))}
-        </div>
-
-        <div className="grid grid-cols-4 gap-1">
-          {ENEMIES.map((enemy) => {
-            const scaled = scaleEnemy(enemy, spawnTier);
-            return (
+            {pendingObj.collectible && (
               <button
-                key={enemy.id}
                 type="button"
-                onClick={() => onArmSpawn(spawningId === enemy.id ? undefined : enemy.id)}
-                title={`${scaled.name} · ${scaled.maxHp} HP · ATK ${scaled.attack} · ARM ${scaled.armor} · RES ${scaled.magicResist}`}
-                className={`grid place-items-center rounded-lg border py-1.5 text-lg ${
-                  spawningId === enemy.id ? 'border-amber-400 bg-amber-500/20' : 'border-slate-700 hover:bg-slate-800'
+                onClick={() => narrate(true)}
+                className="flex-1 rounded-lg border border-emerald-500/50 py-1.5 text-sm font-semibold text-emerald-300 hover:bg-emerald-500/10"
+              >
+                Give to player
+              </button>
+            )}
+            <button
+              type="button"
+              onClick={() => { setNarrateText(''); send({ t: 'gm/narrateObject', text: '', collect: false }); }}
+              title="Skip narration"
+              className="rounded-lg border border-slate-700 px-3 py-1.5 text-sm text-slate-400 hover:bg-slate-800"
+            >
+              Skip
+            </button>
+          </div>
+        </div>
+      ) : (
+        /* Object placement library */
+        <div>
+          <p className="mb-2 text-xs text-slate-400">Place an object — click a sprite then click a tile</p>
+
+          {/* Category tabs */}
+          <div className="mb-2 flex flex-wrap gap-1">
+            {SPRITE_LIBRARY.map((cat, i) => (
+              <button
+                key={cat.name}
+                type="button"
+                onClick={() => setActiveCategory(i)}
+                className={`rounded-full px-2 py-0.5 text-xs ${
+                  activeCategory === i
+                    ? 'border border-amber-500/40 bg-amber-500/20 text-amber-200'
+                    : 'border border-slate-700 text-slate-400 hover:bg-slate-800'
                 }`}
               >
-                {enemy.icon}
+                {cat.name}
               </button>
-            );
-          })}
+            ))}
+          </div>
+
+          {/* Sprite grid */}
+          <div className="grid grid-cols-6 gap-1">
+            {SPRITE_LIBRARY[activeCategory]?.sprites.map((sprite) => (
+              <button
+                key={sprite.emoji}
+                type="button"
+                onClick={() => armSprite(sprite)}
+                title={sprite.label}
+                className={`grid place-items-center rounded-lg border py-1.5 text-lg ${
+                  armedObject?.sprite === sprite.emoji
+                    ? 'border-amber-400 bg-amber-500/20'
+                    : 'border-slate-700 hover:bg-slate-800'
+                }`}
+              >
+                {sprite.emoji}
+              </button>
+            ))}
+          </div>
+
+          {/* Armed object options */}
+          {armedObject && (
+            <div className="mt-2 space-y-2 rounded-lg border border-amber-500/30 bg-amber-500/5 p-2">
+              <p className="text-xs text-amber-300">
+                Placing {armedObject.sprite} {armedObject.label} — click any tile
+              </p>
+              <div className="flex gap-3">
+                <label className="flex cursor-pointer items-center gap-1.5 text-xs text-slate-300">
+                  <input
+                    type="checkbox"
+                    checked={armedObject.blocksMovement}
+                    onChange={(e) => onArmObject({ ...armedObject, blocksMovement: e.target.checked })}
+                    className="accent-amber-400"
+                  />
+                  Blocks movement
+                </label>
+                <label className="flex cursor-pointer items-center gap-1.5 text-xs text-slate-300">
+                  <input
+                    type="checkbox"
+                    checked={armedObject.collectible}
+                    onChange={(e) => onArmObject({ ...armedObject, collectible: e.target.checked })}
+                    className="accent-amber-400"
+                  />
+                  Collectible
+                </label>
+              </div>
+
+              {/* Description */}
+              <textarea
+                value={armedObject.description}
+                onChange={(e) => onArmObject({ ...armedObject, description: e.target.value })}
+                placeholder="Description shown to players before they interact…"
+                rows={2}
+                maxLength={300}
+                className="w-full resize-none rounded border border-slate-700 bg-slate-900 p-1.5 text-xs text-slate-200 placeholder-slate-500 focus:border-amber-500 focus:outline-none"
+              />
+
+              {/* Status effects */}
+              <div className="space-y-1">
+                <p className="text-xs text-slate-400">On interact — apply:</p>
+                <div className="flex flex-wrap gap-1">
+                  {STATUSES.map((st) => {
+                    const active = armedObject.statusEffects.apply.includes(st.id);
+                    return (
+                      <button
+                        key={st.id}
+                        type="button"
+                        onClick={() => toggleStatusEffect('apply', st.id)}
+                        title={st.name}
+                        className={`rounded border px-1.5 py-0.5 text-sm ${
+                          active ? 'border-emerald-500/60 bg-emerald-500/20 text-emerald-200' : 'border-slate-700 text-slate-400 hover:bg-slate-800'
+                        }`}
+                      >
+                        {st.icon}
+                      </button>
+                    );
+                  })}
+                </div>
+                <p className="text-xs text-slate-400">On interact — remove:</p>
+                <div className="flex flex-wrap gap-1">
+                  {STATUSES.map((st) => {
+                    const active = armedObject.statusEffects.remove.includes(st.id);
+                    return (
+                      <button
+                        key={st.id}
+                        type="button"
+                        onClick={() => toggleStatusEffect('remove', st.id)}
+                        title={st.name}
+                        className={`rounded border px-1.5 py-0.5 text-sm ${
+                          active ? 'border-rose-500/60 bg-rose-500/20 text-rose-200' : 'border-slate-700 text-slate-400 hover:bg-slate-800'
+                        }`}
+                      >
+                        {st.icon}
+                      </button>
+                    );
+                  })}
+                </div>
+              </div>
+            </div>
+          )}
         </div>
-        {armed && (
-          <p className="mt-1 text-xs text-amber-300">
-            Placing {scaleEnemy(armed, spawnTier).name} ({scaleEnemy(armed, spawnTier).maxHp} HP) — click a tile, or pick
-            again to cancel.
-          </p>
-        )}
-      </div>
+      )}
 
       <div className="border-t border-slate-800" />
 
-      {/* Selected token controls */}
+      {/* Selected PC token controls */}
       {token ? (
         <div className="space-y-3">
           <div className="text-sm">
             Selected: <span className="font-semibold">{token.name}</span>
-            <span className="ml-1 text-xs text-slate-500">({token.kind})</span>
           </div>
 
           {/* HP */}
@@ -170,42 +323,26 @@ export function GMPanel({
             </div>
           </div>
 
-          {/* Give item (PCs only) */}
-          {token.kind === 'pc' && (
-            <div>
-              <p className="mb-1 text-xs text-slate-400">Give item</p>
-              <div className="flex flex-wrap gap-1">
-                {ITEMS.map((item) => (
-                  <button
-                    key={item.id}
-                    type="button"
-                    onClick={() => send({ t: 'gm/giveItem', charId: token.id, itemId: item.id })}
-                    title={`Give ${item.name}`}
-                    className="rounded border border-slate-700 px-1.5 py-0.5 text-sm hover:bg-slate-800"
-                  >
-                    {item.icon}
-                  </button>
-                ))}
-              </div>
+          {/* Give item */}
+          <div>
+            <p className="mb-1 text-xs text-slate-400">Give item</p>
+            <div className="flex flex-wrap gap-1">
+              {ITEMS.map((item) => (
+                <button
+                  key={item.id}
+                  type="button"
+                  onClick={() => send({ t: 'gm/giveItem', charId: token.id, itemId: item.id })}
+                  title={`Give ${item.name}`}
+                  className="rounded border border-slate-700 px-1.5 py-0.5 text-sm hover:bg-slate-800"
+                >
+                  {item.icon}
+                </button>
+              ))}
             </div>
-          )}
-
-          {/* Remove enemies */}
-          {token.kind === 'enemy' && (
-            <button
-              type="button"
-              onClick={() => {
-                send({ t: 'gm/removeToken', tokenId: token.id });
-                onSelect(undefined);
-              }}
-              className="w-full rounded-lg border border-red-500/40 py-1.5 text-sm text-red-300 hover:bg-red-500/10"
-            >
-              Remove {token.name}
-            </button>
-          )}
+          </div>
         </div>
       ) : (
-        <p className="text-xs text-slate-500">Select a token on the board to manage it.</p>
+        <p className="text-xs text-slate-500">Select a player token on the board to manage them.</p>
       )}
     </div>
   );

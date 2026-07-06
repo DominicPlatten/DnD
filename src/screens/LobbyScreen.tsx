@@ -96,7 +96,6 @@ export function LobbyScreen({
                 {event.t === 'playerLeft' && `${event.name} left the party.`}
                 {event.t === 'characterReady' && `${event.name} is ready for adventure.`}
                 {event.t === 'worldChosen' && `The storyteller revealed the ${event.worldName}.`}
-                {event.t === 'enemySpawned' && `A ${event.name} appears!`}
                 {event.t === 'itemGiven' && `${event.to} received a ${event.item}.`}
                 {event.t === 'diceRolled' && `${event.by} rolled a d${event.sides}: ${event.value}.`}
                 {event.t === 'chestOpened' && `${event.by} opened a chest${event.items.length ? ` (${event.items.join(', ')})` : ''}.`}
@@ -104,8 +103,9 @@ export function LobbyScreen({
                 {event.t === 'lockAttempt' &&
                   `${event.by} ${event.success ? 'picked' : 'failed'} a ${event.target} lock (🎲 ${event.roll}+INT = ${event.total} vs DC ${event.dc}).`}
                 {event.t === 'greeted' && `${event.from} greets ${event.to}.`}
-                {event.t === 'battleStarted' && `A battle with a ${event.foe} begins!`}
-                {event.t === 'battleEnded' && event.outcome}
+                {event.t === 'objectPlaced' && `A ${event.label} was placed on the map.`}
+                {event.t === 'objectInteracted' && `${event.playerName} examines the ${event.objectLabel}.`}
+                {event.t === 'objectCollected' && `${event.playerName} picked up the ${event.objectLabel}.`}
                 {event.t === 'phaseChanged' && `The game moved to “${event.phase}”.`}
               </li>
             ))}

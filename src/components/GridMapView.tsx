@@ -1,6 +1,5 @@
-import type { Coord, GridMap, Interactable, TerrainKind, Token, TokenId } from '@shared/entities';
+import type { Coord, GridMap, Interactable, SceneObject, TerrainKind, Token, TokenId } from '@shared/entities';
 import { getStatus } from '@shared/content/statuses';
-import { getTier } from '@shared/content/enemies';
 import { CharacterToken } from './CharacterToken';
 
 function interactableIcon(o: Interactable): string {
@@ -28,6 +27,7 @@ export function GridMapView({
   map,
   tokens,
   interactables = [],
+  sceneObjects = [],
   cell = 32,
   currentTokenId,
   selectedTokenId,
@@ -35,10 +35,12 @@ export function GridMapView({
   onTileClick,
   onTokenClick,
   onObjectClick,
+  onSceneObjectClick,
 }: {
   map: GridMap;
   tokens: Token[];
   interactables?: Interactable[];
+  sceneObjects?: SceneObject[];
   cell?: number;
   currentTokenId?: TokenId;
   selectedTokenId?: TokenId;
@@ -46,6 +48,7 @@ export function GridMapView({
   onTileClick?: (coord: Coord) => void;
   onTokenClick?: (tokenId: TokenId) => void;
   onObjectClick?: (id: string) => void;
+  onSceneObjectClick?: (id: string) => void;
 }) {
   return (
     <div className="max-w-full overflow-auto rounded-xl border border-slate-800 bg-slate-950 p-2">
@@ -72,6 +75,7 @@ export function GridMapView({
           })}
         </div>
 
+        {/* Built-in interactables (chests, doors) */}
         {interactables.map((object) => {
           const content = <span style={{ fontSize: cell * 0.6 }}>{interactableIcon(object)}</span>;
           return (
@@ -99,6 +103,35 @@ export function GridMapView({
           );
         })}
 
+        {/* GM-placed scene objects */}
+        {sceneObjects.map((obj) => {
+          const content = <span style={{ fontSize: cell * 0.65 }}>{obj.sprite}</span>;
+          return (
+            <div
+              key={obj.id}
+              className="absolute grid place-items-center"
+              style={{ left: obj.coord.x * cell, top: obj.coord.y * cell, width: cell, height: cell }}
+              title={obj.label}
+            >
+              {onSceneObjectClick ? (
+                <button
+                  type="button"
+                  onClick={(e) => {
+                    e.stopPropagation();
+                    onSceneObjectClick(obj.id);
+                  }}
+                  className="grid h-full w-full place-items-center hover:brightness-125"
+                >
+                  {content}
+                </button>
+              ) : (
+                content
+              )}
+            </div>
+          );
+        })}
+
+        {/* Player tokens */}
         {tokens.map((token) => {
           const isCurrent = token.id === currentTokenId;
           const isSelected = token.id === selectedTokenId;
@@ -130,15 +163,6 @@ export function GridMapView({
                 </button>
               ) : (
                 <div className={`rounded-full ${ring}`}>{inner}</div>
-              )}
-
-              {token.tier && token.tier !== 'normal' && (
-                <div
-                  className="pointer-events-none absolute -top-1 left-0 text-[10px] leading-none"
-                  title={getTier(token.tier).label}
-                >
-                  {getTier(token.tier).badge}
-                </div>
               )}
 
               {token.statuses.length > 0 && (

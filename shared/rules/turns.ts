@@ -1,4 +1,4 @@
-import type { Coord, GridMap, Initiative, Interactable, Token, TokenId } from '../entities';
+import type { Coord, GridMap, Initiative, Interactable, SceneObject, Token, TokenId } from '../entities';
 import { makeRng, randInt } from '../world/rng';
 import { isPassable, tileAt } from '../world/types';
 
@@ -7,6 +7,11 @@ export function objectBlocks(interactables: Record<string, Interactable>, x: num
   return Object.values(interactables).some(
     (o) => o.coord.x === x && o.coord.y === y && (o.kind === 'chest' || (o.kind === 'door' && !o.open)),
   );
+}
+
+/** A tile is blocked by a scene object with blocksMovement set. */
+export function sceneObjectBlocks(sceneObjects: Record<string, SceneObject>, x: number, y: number): boolean {
+  return Object.values(sceneObjects).some((o) => o.coord.x === x && o.coord.y === y && o.blocksMovement);
 }
 
 /** Chebyshev distance — how "adjacent" two coords are (1 = touching). */
@@ -54,12 +59,6 @@ export function advanceTurn(init: Initiative, tokens: Record<TokenId, Token>): I
   return { order: init.order, currentIndex: idx, round };
 }
 
-/** Add a newly-spawned token to the end of the current turn order. */
-export function appendToInitiative(init: Initiative, id: TokenId): Initiative {
-  if (init.order.includes(id)) return init;
-  return { ...init, order: [...init.order, id] };
-}
-
 /** Remove a token from the turn order, keeping the pointer sensible. */
 export function removeFromInitiative(init: Initiative, id: TokenId): Initiative | null {
   if (!init.order.includes(id)) return init;
@@ -87,6 +86,7 @@ export function checkMove(
   map: GridMap,
   tokens: Record<TokenId, Token>,
   interactables: Record<string, Interactable>,
+  sceneObjects: Record<string, SceneObject>,
   tokenId: TokenId,
   to: Coord,
   opts: MoveOptions,
@@ -96,10 +96,11 @@ export function checkMove(
   if (to.x < 0 || to.y < 0 || to.x >= map.width || to.y >= map.height) return 'That is off the map.';
   if (!isPassable(tileAt(map, to.x, to.y))) return 'That tile is blocked.';
   if (objectBlocks(interactables, to.x, to.y)) return 'Something is in the way.';
+  if (sceneObjectBlocks(sceneObjects, to.x, to.y)) return 'Something is in the way.';
   const occupied = Object.values(tokens).some(
     (t) => t.id !== tokenId && t.coord.x === to.x && t.coord.y === to.y,
   );
-  if (occupied) return 'A creature is already there.';
+  if (occupied) return 'Someone is already there.';
   if (opts.enforceRange && chebyshev(token.coord, to) > moveRange(token)) {
     return 'That is too far for one move.';
   }

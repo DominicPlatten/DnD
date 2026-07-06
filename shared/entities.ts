@@ -1,9 +1,7 @@
 /**
  * Core domain entities. Framework-free: imported by both the PartyKit server
- * and the React client. Phase 0 only needs players; characters, tokens, maps,
- * enemies and items get added here in later phases.
+ * and the React client.
  */
-import type { EnemyTier } from './content/enemies';
 
 export type PlayerId = string;
 
@@ -20,7 +18,7 @@ export interface Player {
 
 /**
  * The six abilities. `mag` (Magic) replaces classic Wisdom: it powers magical
- * attacks and wards. STR/DEX/CON/INT/CHA keep their usual meaning.
+ * effects and wards. STR/DEX/CON/INT/CHA keep their usual meaning.
  */
 export type AbilityKey = 'str' | 'dex' | 'con' | 'int' | 'mag' | 'cha';
 export type Abilities = Record<AbilityKey, number>;
@@ -31,34 +29,22 @@ export interface Race {
   id: RaceId;
   name: string;
   blurb: string;
-  /** Added on top of the player's point-buy base scores. */
   abilityMods: Partial<Abilities>;
   speed: number;
 }
 
 export type ClassId = string;
 
-/**
- * A character class: its move kit and which ability powers its attacks. The
- * registry lives in content/classes; the reducer validates the chosen id.
- */
 export interface ClassDef {
   id: ClassId;
   name: string;
   icon: string;
   blurb: string;
-  /** Ability whose modifier scales this class's attack/heal strength in battle. */
+  /** Which ability score is this class's primary stat (for flavour and character display). */
   primary: AbilityKey;
-  /** Whether this class's attacks are resisted by armor (physical) or magic resist (magic). */
-  damageType: DamageType;
-  /** Battle move kit (ids into content/moves). */
-  moves: string[];
   /** Flat HP added on top of the CON-derived base, so martials are sturdier. */
   hpBonus: number;
 }
-
-/** Physical damage is reduced by armor; magic damage by magic resist. */
-export type DamageType = 'physical' | 'magic';
 
 /** A token's look: a color + an emoji, both chosen from preset sets. */
 export interface CharacterVisual {
@@ -73,6 +59,13 @@ export type CharId = PlayerId;
 export interface ItemStack {
   itemId: string;
   qty: number;
+}
+
+/** A note added to a character when they collect a scene object. */
+export interface NarrativeNote {
+  sprite: string;
+  label: string;
+  text: string;
 }
 
 /** What a client submits to create/update their character (pre-racial scores). */
@@ -93,7 +86,6 @@ export interface Character {
   classId: ClassId;
   visual: CharacterVisual;
   level: number;
-  /** Final scores: point-buy base + racial mods. */
   abilities: Abilities;
   hp: number;
   maxHp: number;
@@ -101,6 +93,7 @@ export interface Character {
   speed: number;
   initiative: number;
   inventory: ItemStack[];
+  notes: NarrativeNote[];
 }
 
 // ---- World & tokens ----------------------------------------------------------
@@ -112,7 +105,6 @@ export interface Coord {
 
 export type TerrainKind = 'wall' | 'floor' | 'grass' | 'tree' | 'water';
 
-/** Open string so new world types are just a new generator, no type change. */
 export type WorldType = string;
 
 export interface GridMap {
@@ -120,16 +112,14 @@ export interface GridMap {
   seed: number;
   width: number;
   height: number;
-  /** Row-major terrain, length = width * height. */
   tiles: TerrainKind[];
-  /** Where player tokens are placed when the adventure starts. */
   spawnPoints: Coord[];
 }
 
 export type TokenId = string;
-export type TokenKind = 'pc' | 'enemy';
+export type TokenKind = 'pc';
 
-/** An entity placed on the grid during play. PC tokens mirror a character. */
+/** A player character placed on the grid during play. */
 export interface Token {
   id: TokenId;
   kind: TokenKind;
@@ -138,32 +128,16 @@ export interface Token {
   coord: Coord;
   hp: number;
   maxHp: number;
-  /** Initiative modifier, used to roll turn order. */
   initiative: number;
-  /** Movement speed in feet (5 ft per tile). */
   speed: number;
-  /** Active status-condition ids (see content/statuses). */
   statuses: string[];
   ownerId?: PlayerId;
-  /** For enemy tokens: which bestiary preset they came from (battle stats). */
-  enemyId?: string;
-  /** Enemy combat stats after tier scaling (set at spawn). PCs derive theirs from abilities. */
-  attack?: number;
-  /** Physical damage reduction (enemies). */
-  armor?: number;
-  /** Magic damage reduction (enemies). */
-  magicResist?: number;
-  /** Difficulty tier of a spawned enemy; drives the board badge. */
-  tier?: EnemyTier;
 }
 
 /** Turn order for the current encounter. */
 export interface Initiative {
-  /** Token ids from first to last to act. */
   order: TokenId[];
-  /** Index into `order` of the token whose turn it is. */
   currentIndex: number;
-  /** 1-based round counter. */
   round: number;
 }
 
@@ -181,59 +155,37 @@ export interface DiceRoll {
   seq: number;
 }
 
-// ---- Interactable world objects ----------------------------------------------
-
-// ---- Battle (Pokémon-style encounter) ----------------------------------------
-
-/** One fighter in a battle. Sides are arrays so party/duo fights expand later. */
-export interface Combatant {
-  id: string;
-  tokenId: TokenId;
-  side: 'party' | 'foe';
-  name: string;
-  visual: CharacterVisual;
-  hp: number;
-  maxHp: number;
-  speed: number;
-  /** Offensive modifier added to a move's dice (the class's primary-stat mod for PCs). */
-  power: number;
-  /** Physical damage reduction. */
-  armor: number;
-  /** Magic damage reduction. */
-  magicResist: number;
-  /** True for the round in which this fighter chose Guard. */
-  guarding: boolean;
-  /** Which player picks this fighter's moves; undefined = AI-controlled. */
-  controllerId?: PlayerId;
-  moves: string[];
-}
-
-export interface Battle {
-  id: string;
-  combatants: Record<string, Combatant>;
-  round: number;
-  phase: 'choosing' | 'over';
-  /** combatantId -> chosen moveId for the round being assembled. */
-  pending: Record<string, string>;
-  log: string[];
-  /** Seed for deterministic resolution (accuracy rolls, AI). */
-  seed: number;
-  winner?: 'party' | 'foe';
-  fled?: boolean;
-}
+// ---- Interactables & scene objects ------------------------------------------
 
 export type InteractableKind = 'chest' | 'door';
 
-/** A thing on the grid a player can use with their action (chest, door, ...). */
+/** A built-in world object players can use with their action (chest, door). */
 export interface Interactable {
   id: string;
   kind: InteractableKind;
   coord: Coord;
-  /** chest: loot inside, and whether it's been taken. */
   contents?: ItemStack[];
   looted?: boolean;
-  /** door: whether it's open (open doors are passable). */
   open?: boolean;
-  /** Lock difficulty: an INT check (d20 + INT mod) must meet this to open. 0/undefined = unlocked. */
   dc?: number;
+}
+
+/** A GM-placed scene object (prop, NPC, event marker, etc.). */
+export interface SceneObject {
+  id: string;
+  sprite: string;
+  label: string;
+  coord: Coord;
+  blocksMovement: boolean;
+  collectible: boolean;
+  /** Flavour text shown to players before they interact. Used as note text for collectibles. */
+  description: string;
+  /** Status effect ids to add/remove when a player interacts with this object. */
+  statusEffects: { apply: string[]; remove: string[] };
+}
+
+/** Set when a player has interacted with a scene object and is waiting for GM narration. */
+export interface PendingInteraction {
+  objectId: string;
+  playerId: PlayerId;
 }

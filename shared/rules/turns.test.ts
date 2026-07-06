@@ -66,26 +66,26 @@ describe('checkMove', () => {
   const tokens = asRecord(token('a', { coord: { x: 0, y: 0 }, speed: 10 }), token('b', { coord: { x: 2, y: 0 } }));
 
   it('reports a blocked (wall) tile', () => {
-    expect(checkMove(map, tokens, {}, 'a', { x: 1, y: 0 }, { enforceRange: true })).toBe('That tile is blocked.');
+    expect(checkMove(map, tokens, {}, {}, 'a', { x: 1, y: 0 }, { enforceRange: true })).toBe('That tile is blocked.');
   });
 
   it('rejects out-of-bounds and occupied tiles', () => {
-    expect(checkMove(map, tokens, {}, 'a', { x: 3, y: 0 }, { enforceRange: true })).toMatch(/off the map/);
-    expect(checkMove(map, tokens, {}, 'a', { x: 2, y: 0 }, { enforceRange: false })).toMatch(/already there/);
+    expect(checkMove(map, tokens, {}, {}, 'a', { x: 3, y: 0 }, { enforceRange: true })).toMatch(/off the map/);
+    expect(checkMove(map, tokens, {}, {}, 'a', { x: 2, y: 0 }, { enforceRange: false })).toMatch(/already there/);
   });
 
   it('blocks a tile occupied by a closed door but not an open one', () => {
     const solo = asRecord(token('a', { coord: { x: 0, y: 0 } }));
     const closed = { d: { id: 'd', kind: 'door' as const, coord: { x: 2, y: 0 }, open: false } };
     const open = { d: { id: 'd', kind: 'door' as const, coord: { x: 2, y: 0 }, open: true } };
-    expect(checkMove(map, solo, closed, 'a', { x: 2, y: 0 }, { enforceRange: false })).toMatch(/in the way/);
-    expect(checkMove(map, solo, open, 'a', { x: 2, y: 0 }, { enforceRange: false })).toBeNull();
+    expect(checkMove(map, solo, closed, {}, 'a', { x: 2, y: 0 }, { enforceRange: false })).toMatch(/in the way/);
+    expect(checkMove(map, solo, open, {}, 'a', { x: 2, y: 0 }, { enforceRange: false })).toBeNull();
   });
 
   it('enforces range only when asked', () => {
     const far = asRecord(token('a', { coord: { x: 0, y: 0 }, speed: 5 })); // range 1
-    expect(checkMove(map, far, {}, 'a', { x: 2, y: 0 }, { enforceRange: true })).toMatch(/too far/);
-    expect(checkMove(map, far, {}, 'a', { x: 2, y: 0 }, { enforceRange: false })).toBeNull();
+    expect(checkMove(map, far, {}, {}, 'a', { x: 2, y: 0 }, { enforceRange: true })).toMatch(/too far/);
+    expect(checkMove(map, far, {}, {}, 'a', { x: 2, y: 0 }, { enforceRange: false })).toBeNull();
   });
 
   it('reports the current token', () => {

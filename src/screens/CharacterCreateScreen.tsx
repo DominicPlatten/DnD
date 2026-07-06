@@ -180,7 +180,7 @@ export function CharacterCreateScreen({ send }: { send: (command: Command) => vo
               </div>
               <div className="mt-0.5 text-xs text-slate-400">{c.blurb}</div>
               <div className="mt-1 text-xs font-medium text-indigo-300">
-                {ABILITY_NAMES[c.primary]} · {c.damageType} attacks
+                Primary: {ABILITY_NAMES[c.primary]}
               </div>
             </button>
           ))}

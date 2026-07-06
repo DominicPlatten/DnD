@@ -40,6 +40,9 @@ export function useGameSocket(code: string, name: string) {
         case 'error':
           console.warn('[server]', message.message);
           break;
+        case 'narration':
+          store().setPendingNarration({ sprite: message.sprite, label: message.label, text: message.text });
+          break;
       }
     };
 

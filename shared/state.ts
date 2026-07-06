@@ -1,13 +1,14 @@
 import type {
-  Battle,
   Character,
   CharId,
   DiceRoll,
   GridMap,
   Initiative,
   Interactable,
+  PendingInteraction,
   Player,
   PlayerId,
+  SceneObject,
   Token,
   TokenId,
   TurnResources,
@@ -33,20 +34,16 @@ export interface GameState {
   gmId: PlayerId | null;
   players: Record<PlayerId, Player>;
   characters: Record<CharId, Character>;
-  /** Chosen by the GM during setup; null until then. */
   map: GridMap | null;
-  /** On-grid entities during play (PC and enemy tokens). */
   tokens: Record<TokenId, Token>;
-  /** Turn order once the adventure starts; null before then. */
   initiative: Initiative | null;
-  /** What the current actor has spent this turn (one move + one action). */
   turn: TurnResources;
-  /** Objects on the grid players can interact with (chests, doors). */
   interactables: Record<string, Interactable>;
-  /** The latest dice roll, shown to everyone; null until the first roll. */
+  /** GM-placed scene objects (props, NPCs, event markers). */
+  sceneObjects: Record<string, SceneObject>;
+  /** Set when a player has interacted with a scene object; GM must narrate to clear it. */
+  pendingInteraction: PendingInteraction | null;
   lastRoll: DiceRoll | null;
-  /** The active encounter; when set, the board pauses and everyone watches. */
-  battle: Battle | null;
 }
 
 export function createInitialState(code: string): GameState {
@@ -61,7 +58,8 @@ export function createInitialState(code: string): GameState {
     initiative: null,
     turn: { moved: false, acted: false },
     interactables: {},
+    sceneObjects: {},
+    pendingInteraction: null,
     lastRoll: null,
-    battle: null,
   };
 }

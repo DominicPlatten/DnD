@@ -2,6 +2,7 @@ import type * as Party from 'partykit/server';
 import { createInitialState, type GameState } from '../shared/state';
 import { CommandSchema } from '../shared/protocol/commands';
 import type { GameEvent, ServerMessage } from '../shared/protocol/messages';
+import type { PlayerId } from '../shared/entities';
 import { applyCommand, markOffline } from '../shared/rules/reducer';
 
 const STORAGE_KEY = 'state';
@@ -51,7 +52,7 @@ export default class GameRoom implements Party.Server {
       return this.sendTo(sender, { t: 'error', message: 'Unrecognized command.' });
     }
 
-    const { state, events, error } = applyCommand(this.state, result.data, {
+    const { state, events, error, targeted } = applyCommand(this.state, result.data, {
       id: sender.id,
       random: Math.random(),
     });
@@ -61,6 +62,7 @@ export default class GameRoom implements Party.Server {
 
     await this.commit(state);
     events.forEach((event) => this.broadcastEvent(event));
+    targeted?.forEach(({ playerId, message }) => this.sendToPlayerId(playerId, message));
   }
 
   async onClose(conn: Party.Connection) {
@@ -90,5 +92,14 @@ export default class GameRoom implements Party.Server {
 
   private sendTo(conn: Party.Connection, message: ServerMessage) {
     conn.send(JSON.stringify(message));
+  }
+
+  private sendToPlayerId(playerId: PlayerId, message: ServerMessage) {
+    for (const conn of this.room.getConnections()) {
+      if (conn.id === playerId) {
+        conn.send(JSON.stringify(message));
+        return;
+      }
+    }
   }
 }

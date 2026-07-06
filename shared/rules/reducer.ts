@@ -1,32 +1,22 @@
 import type { GameState, Phase } from '../state';
 import type { Command } from '../protocol/commands';
-import type { GameEvent } from '../protocol/messages';
-import type { Battle, Coord, Interactable, ItemStack, Player, PlayerId, Token, TokenId } from '../entities';
+import type { GameEvent, ServerMessage } from '../protocol/messages';
+import type { Coord, ItemStack, NarrativeNote, Player, PlayerId, SceneObject, Token, TokenId } from '../entities';
 import { getRace } from '../content/races';
 import { getClass } from '../content/classes';
 import { isValidColor, isValidIcon } from '../content/visuals';
 import { getStatus } from '../content/statuses';
 import { getItem } from '../content/items';
-import { getEnemy, scaleEnemy } from '../content/enemies';
+import { isValidSprite } from '../content/sceneObjects';
 import { abilityMod, buildCharacter, isLegalPointBuy } from './character';
-import {
-  chooseMove as chooseBattleMove,
-  foeCombatant,
-  isReadyToResolve,
-  partyCombatant,
-  resolveRound,
-  startBattle,
-} from './battle';
 import { getGenerator } from '../world/registry';
 import { placeInteractables } from '../world/populate';
 import { DEFAULT_WORLD_SIZE, isPassable, tileAt } from '../world/types';
 import {
   advanceTurn,
-  appendToInitiative,
   chebyshev,
   checkMove,
   currentTokenId,
-  objectBlocks,
   removeFromInitiative,
   rollInitiative,
 } from './turns';
@@ -51,6 +41,8 @@ export interface ReduceResult {
   events: GameEvent[];
   /** Set when the command was rejected; the server relays it only to the sender. */
   error?: string;
+  /** Targeted messages sent privately to specific players (not broadcast). */
+  targeted?: Array<{ playerId: PlayerId; message: ServerMessage }>;
 }
 
 const PHASE_ORDER: readonly Phase[] = ['lobby', 'setup', 'playing', 'ended'];
@@ -62,8 +54,6 @@ function reject(state: GameState, error: string): ReduceResult {
 export function applyCommand(state: GameState, command: Command, sender: Sender): ReduceResult {
   switch (command.t) {
     case 'join': {
-      // Reconnect: a returning id keeps its role, character, and turn — we just
-      // mark it online again (and let it refresh its name).
       const existing = state.players[sender.id];
       if (existing) {
         return {
@@ -92,7 +82,6 @@ export function applyCommand(state: GameState, command: Command, sender: Sender)
     }
 
     case 'leave': {
-      // Intentional exit (the Leave button): actually remove the player.
       return removePlayer(state, sender.id);
     }
 
@@ -161,7 +150,6 @@ export function applyCommand(state: GameState, command: Command, sender: Sender)
     }
 
     case 'moveToken': {
-      if (state.battle) return reject(state, 'Resolve the battle first.');
       if (state.phase !== 'playing' || !state.map || !state.initiative) {
         return reject(state, 'You can only move during play.');
       }
@@ -173,7 +161,7 @@ export function applyCommand(state: GameState, command: Command, sender: Sender)
         if (currentTokenId(state.initiative) !== token.id) return reject(state, 'It is not your turn.');
         if (state.turn.moved) return reject(state, 'You have already moved this turn.');
       }
-      const error = checkMove(state.map, state.tokens, state.interactables, command.tokenId, command.to, {
+      const error = checkMove(state.map, state.tokens, state.interactables, state.sceneObjects, command.tokenId, command.to, {
         enforceRange: !isGm,
       });
       if (error) return reject(state, error);
@@ -188,7 +176,6 @@ export function applyCommand(state: GameState, command: Command, sender: Sender)
     }
 
     case 'endTurn': {
-      if (state.battle) return reject(state, 'Resolve the battle first.');
       if (state.phase !== 'playing' || !state.initiative) return reject(state, 'The adventure is not underway.');
       const currentId = currentTokenId(state.initiative);
       const current = currentId ? state.tokens[currentId] : undefined;
@@ -201,7 +188,6 @@ export function applyCommand(state: GameState, command: Command, sender: Sender)
     }
 
     case 'interact': {
-      if (state.battle) return reject(state, 'Resolve the battle first.');
       if (state.phase !== 'playing' || !state.initiative) return reject(state, 'You can only interact during play.');
       if (sender.id === state.gmId) return reject(state, 'The storyteller acts through their toolkit.');
       const actor = Object.values(state.tokens).find((t) => t.ownerId === sender.id);
@@ -209,31 +195,6 @@ export function applyCommand(state: GameState, command: Command, sender: Sender)
       if (currentTokenId(state.initiative) !== actor.id) return reject(state, 'It is not your turn.');
       if (state.turn.acted) return reject(state, 'You have already acted this turn.');
       return resolveInteraction(state, actor, command.targetId, sender.random ?? 0);
-    }
-
-    case 'battle/chooseMove': {
-      if (!state.battle) return reject(state, 'There is no battle right now.');
-      if (state.battle.phase !== 'choosing') return reject(state, 'The battle is over.');
-      const mine = Object.values(state.battle.combatants).find((c) => c.controllerId === sender.id);
-      if (!mine) return reject(state, 'You are not fighting in this battle.');
-      const chosen = chooseBattleMove(state.battle, mine.id, command.moveId);
-      if (chosen.error) return reject(state, chosen.error);
-
-      let battle = chosen.battle;
-      const events: GameEvent[] = [];
-      if (isReadyToResolve(battle)) {
-        battle = resolveRound(battle);
-        if (battle.phase === 'over') events.push({ t: 'battleEnded', outcome: battleOutcomeText(battle) });
-      }
-      return { state: { ...state, battle }, events };
-    }
-
-    case 'battle/dismiss': {
-      if (!state.battle) return reject(state, 'There is no battle right now.');
-      if (state.battle.phase !== 'over') return reject(state, 'The battle is still raging.');
-      const participant = Object.values(state.battle.combatants).some((c) => c.controllerId === sender.id);
-      if (sender.id !== state.gmId && !participant) return reject(state, 'Only a fighter can close the battle.');
-      return { state: applyBattleResults(state, state.battle), events: [] };
     }
 
     case 'gm/rollDice': {
@@ -289,57 +250,6 @@ export function applyCommand(state: GameState, command: Command, sender: Sender)
       };
     }
 
-    case 'gm/spawnEnemy': {
-      if (sender.id !== state.gmId) return reject(state, 'Only the GM can spawn enemies.');
-      if (state.phase !== 'playing' || !state.map) return reject(state, 'Enemies appear during play.');
-      const def = getEnemy(command.enemyId);
-      if (!def) return reject(state, 'Unknown creature.');
-      if (state.tokens[command.tokenId]) return reject(state, 'That token already exists.');
-      const placement = placementError(state.map, state.tokens, state.interactables, command.at);
-      if (placement) return reject(state, placement);
-      const scaled = scaleEnemy(def, command.tier ?? 'normal');
-      const token: Token = {
-        id: command.tokenId,
-        kind: 'enemy',
-        name: scaled.name,
-        visual: { color: def.color, icon: def.icon },
-        coord: command.at,
-        hp: scaled.maxHp,
-        maxHp: scaled.maxHp,
-        initiative: def.initiative,
-        speed: def.speed,
-        statuses: [],
-        enemyId: def.id,
-        attack: scaled.attack,
-        armor: scaled.armor,
-        magicResist: scaled.magicResist,
-        tier: scaled.tier,
-      };
-      return {
-        state: {
-          ...state,
-          tokens: { ...state.tokens, [token.id]: token },
-          initiative: state.initiative ? appendToInitiative(state.initiative, token.id) : state.initiative,
-        },
-        events: [{ t: 'enemySpawned', name: scaled.name }],
-      };
-    }
-
-    case 'gm/removeToken': {
-      if (sender.id !== state.gmId) return reject(state, 'Only the GM can remove tokens.');
-      if (!state.tokens[command.tokenId]) return reject(state, 'No such token.');
-      const tokens = { ...state.tokens };
-      delete tokens[command.tokenId];
-      return {
-        state: {
-          ...state,
-          tokens,
-          initiative: state.initiative ? removeFromInitiative(state.initiative, command.tokenId) : null,
-        },
-        events: [],
-      };
-    }
-
     case 'gm/giveItem': {
       if (sender.id !== state.gmId) return reject(state, 'Only the GM can give items.');
       const character = state.characters[command.charId];
@@ -369,24 +279,122 @@ export function applyCommand(state: GameState, command: Command, sender: Sender)
         events: [{ t: 'phaseChanged', phase: nextPhase }],
       };
     }
+
+    case 'gm/placeObject': {
+      if (sender.id !== state.gmId) return reject(state, 'Only the GM can place objects.');
+      if (state.phase !== 'playing' || !state.map) return reject(state, 'Objects can only be placed during play.');
+      if (!isValidSprite(command.sprite)) return reject(state, 'Unknown sprite.');
+      if (state.sceneObjects[command.id]) return reject(state, 'That object id already exists.');
+      const { at } = command;
+      if (at.x < 0 || at.y < 0 || at.x >= state.map.width || at.y >= state.map.height) {
+        return reject(state, 'That is off the map.');
+      }
+      if (!isPassable(tileAt(state.map, at.x, at.y))) return reject(state, 'That tile is blocked.');
+      const obj: SceneObject = {
+        id: command.id,
+        sprite: command.sprite,
+        label: command.label,
+        coord: at,
+        blocksMovement: command.blocksMovement,
+        collectible: command.collectible,
+        description: command.description,
+        statusEffects: command.statusEffects,
+      };
+      return {
+        state: { ...state, sceneObjects: { ...state.sceneObjects, [obj.id]: obj } },
+        events: [{ t: 'objectPlaced', label: obj.label }],
+      };
+    }
+
+    case 'gm/removeObject': {
+      if (sender.id !== state.gmId) return reject(state, 'Only the GM can remove objects.');
+      if (!state.sceneObjects[command.id]) return reject(state, 'No such object.');
+      const sceneObjects = { ...state.sceneObjects };
+      delete sceneObjects[command.id];
+      const pendingInteraction =
+        state.pendingInteraction?.objectId === command.id ? null : state.pendingInteraction;
+      return { state: { ...state, sceneObjects, pendingInteraction }, events: [] };
+    }
+
+    case 'gm/editObject': {
+      if (sender.id !== state.gmId) return reject(state, 'Only the GM can edit objects.');
+      const existing = state.sceneObjects[command.id];
+      if (!existing) return reject(state, 'No such object.');
+      const updated = {
+        ...existing,
+        label: command.label,
+        blocksMovement: command.blocksMovement,
+        collectible: command.collectible,
+        description: command.description,
+        statusEffects: command.statusEffects,
+      };
+      return { state: { ...state, sceneObjects: { ...state.sceneObjects, [existing.id]: updated } }, events: [] };
+    }
+
+    case 'gm/narrateObject': {
+      if (sender.id !== state.gmId) return reject(state, 'Only the GM can narrate.');
+      if (!state.pendingInteraction) return reject(state, 'No pending interaction.');
+      const { objectId, playerId } = state.pendingInteraction;
+      const obj = state.sceneObjects[objectId];
+      if (!obj) {
+        return { state: { ...state, pendingInteraction: null }, events: [] };
+      }
+
+      const targeted: Array<{ playerId: PlayerId; message: ServerMessage }> = [];
+      let newState: GameState = { ...state, pendingInteraction: null };
+      const events: GameEvent[] = [];
+
+      const narrateText = command.text.trim().length > 0 ? command.text : obj.description;
+      if (narrateText.length > 0) {
+        targeted.push({
+          playerId,
+          message: { t: 'narration', sprite: obj.sprite, label: obj.label, text: narrateText },
+        });
+      }
+
+      if (command.collect && obj.collectible) {
+        const sceneObjects = { ...state.sceneObjects };
+        delete sceneObjects[objectId];
+        const character = state.characters[playerId];
+        const note: NarrativeNote = { sprite: obj.sprite, label: obj.label, text: narrateText };
+        const updatedChar = character
+          ? { ...character, notes: [...character.notes, note] }
+          : undefined;
+        newState = {
+          ...newState,
+          sceneObjects,
+          characters: updatedChar
+            ? { ...state.characters, [playerId]: updatedChar }
+            : state.characters,
+        };
+        const playerName = state.players[playerId]?.name ?? 'A player';
+        events.push({ t: 'objectCollected', playerName, objectLabel: obj.label });
+      }
+
+      return { state: newState, events, targeted };
+    }
   }
 }
 
-/** Whether a token may be placed on a tile (in bounds, passable, unoccupied). */
-function placementError(
-  map: GameState['map'],
-  tokens: Record<TokenId, Token>,
-  interactables: Record<string, Interactable>,
-  at: Coord,
-): string | null {
-  if (!map) return 'There is no map.';
-  if (at.x < 0 || at.y < 0 || at.x >= map.width || at.y >= map.height) return 'That is off the map.';
-  if (!isPassable(tileAt(map, at.x, at.y))) return 'That tile is blocked.';
-  if (objectBlocks(interactables, at.x, at.y)) return 'Something is in the way.';
-  if (Object.values(tokens).some((t) => t.coord.x === at.x && t.coord.y === at.y)) {
-    return 'A creature is already there.';
-  }
-  return null;
+/** A d20 skill check: 1d20 (from server entropy) + a modifier vs a DC. */
+interface Check {
+  roll: number;
+  total: number;
+  success: boolean;
+}
+
+function d20Check(mod: number, dc: number, entropy: number): Check {
+  const roll = 1 + Math.floor(entropy * 20);
+  const total = roll + mod;
+  return { roll, total, success: total >= dc };
+}
+
+function checkRoll(state: GameState, by: string, roll: number): GameState['lastRoll'] {
+  return { sides: 20, value: roll, by, seq: (state.lastRoll?.seq ?? 0) + 1 };
+}
+
+function lockEvent(by: string, target: 'chest' | 'door', check: Check, dc: number): GameEvent {
+  return { t: 'lockAttempt', by, target, success: check.success, roll: check.roll, total: check.total, dc };
 }
 
 /** Add one character's inventory to another set of item stacks, merging counts. */
@@ -401,50 +409,61 @@ function mergeInventory(inventory: ItemStack[], additions: ItemStack[]): ItemSta
 }
 
 /**
- * Resolve a player's `interact` action against an adjacent target. The target's
- * kind decides the effect — a switchboard that new interactable/target kinds
- * (levers, NPCs, trading, ...) slot into. Enemies will route to battle next.
+ * Resolve a player's `interact` action against an adjacent target.
  */
-interface Check {
-  roll: number;
-  total: number;
-  success: boolean;
-}
-
-/** A d20 skill check: 1d20 (from server entropy) + a modifier vs a DC. */
-function d20Check(mod: number, dc: number, entropy: number): Check {
-  const roll = 1 + Math.floor(entropy * 20);
-  const total = roll + mod;
-  return { roll, total, success: total >= dc };
-}
-
-/** A shared dice-display roll so everyone sees the d20 a check produced. */
-function checkRoll(state: GameState, by: string, roll: number): GameState['lastRoll'] {
-  return { sides: 20, value: roll, by, seq: (state.lastRoll?.seq ?? 0) + 1 };
-}
-
-function lockEvent(by: string, target: 'chest' | 'door', check: Check, dc: number): GameEvent {
-  return { t: 'lockAttempt', by, target, success: check.success, roll: check.roll, total: check.total, dc };
-}
-
 function resolveInteraction(state: GameState, actor: Token, targetId: string, entropy: number): ReduceResult {
   const spent = { ...state.turn, acted: true };
+
+  // Scene objects: apply status effects, then auto-collect or request GM narration
+  const sceneObject = state.sceneObjects[targetId];
+  if (sceneObject) {
+    if (chebyshev(actor.coord, sceneObject.coord) > 1) return reject(state, 'You are too far away.');
+    let updatedToken = actor;
+    for (const sid of sceneObject.statusEffects.apply) {
+      if (!updatedToken.statuses.includes(sid)) {
+        updatedToken = { ...updatedToken, statuses: [...updatedToken.statuses, sid] };
+      }
+    }
+    for (const sid of sceneObject.statusEffects.remove) {
+      updatedToken = { ...updatedToken, statuses: updatedToken.statuses.filter((s) => s !== sid) };
+    }
+    const tokens = updatedToken !== actor ? { ...state.tokens, [actor.id]: updatedToken } : state.tokens;
+
+    if (sceneObject.collectible) {
+      const sceneObjects = { ...state.sceneObjects };
+      delete sceneObjects[sceneObject.id];
+      const character = state.characters[actor.id];
+      const note: NarrativeNote = { sprite: sceneObject.sprite, label: sceneObject.label, text: sceneObject.description };
+      const updatedChar = character ? { ...character, notes: [...character.notes, note] } : undefined;
+      const playerName = state.players[actor.ownerId!]?.name ?? actor.name;
+      return {
+        state: {
+          ...state,
+          turn: spent,
+          tokens,
+          sceneObjects,
+          characters: updatedChar ? { ...state.characters, [actor.id]: updatedChar } : state.characters,
+        },
+        events: [{ t: 'objectCollected', playerName, objectLabel: sceneObject.label }],
+      };
+    }
+
+    return {
+      state: { ...state, turn: spent, tokens, pendingInteraction: { objectId: sceneObject.id, playerId: actor.ownerId! } },
+      events: [{ t: 'objectInteracted', playerName: actor.name, objectLabel: sceneObject.label }],
+    };
+  }
+
+  // Built-in interactables (chests, doors)
   const interactable = state.interactables[targetId];
-  const targetToken = state.tokens[targetId];
-
-  const targetCoord = interactable?.coord ?? targetToken?.coord;
-  if (!targetCoord) return reject(state, 'There is nothing there to interact with.');
-  if (chebyshev(actor.coord, targetCoord) > 1) return reject(state, 'You are too far away.');
-
   if (interactable) {
     const character = state.characters[actor.id];
     const intMod = character ? abilityMod(character.abilities.int) : 0;
+    if (chebyshev(actor.coord, interactable.coord) > 1) return reject(state, 'You are too far away.');
 
     if (interactable.kind === 'chest') {
       if (interactable.looted) return reject(state, 'The chest is already empty.');
       if (!character) return reject(state, 'Only characters can carry loot.');
-
-      // A locked chest needs an INT check to force open; failure still spends the action.
       const dc = interactable.dc ?? 0;
       const check = dc > 0 ? d20Check(intMod, dc, entropy) : null;
       const lastRoll = check ? checkRoll(state, actor.name, check.roll) : state.lastRoll;
@@ -452,7 +471,6 @@ function resolveInteraction(state: GameState, actor: Token, targetId: string, en
       if (check && !check.success) {
         return { state: { ...state, turn: spent, lastRoll }, events: lockEvents };
       }
-
       const contents = interactable.contents ?? [];
       const items = contents.map((s) => getItem(s.itemId)?.name ?? s.itemId);
       return {
@@ -470,10 +488,14 @@ function resolveInteraction(state: GameState, actor: Token, targetId: string, en
       };
     }
 
-    // door: closing an open door is free; forcing a locked one open needs an INT check.
+    // Door
     if (interactable.open) {
       return {
-        state: { ...state, turn: spent, interactables: { ...state.interactables, [interactable.id]: { ...interactable, open: false } } },
+        state: {
+          ...state,
+          turn: spent,
+          interactables: { ...state.interactables, [interactable.id]: { ...interactable, open: false } },
+        },
         events: [{ t: 'doorToggled', open: false }],
       };
     }
@@ -485,67 +507,25 @@ function resolveInteraction(state: GameState, actor: Token, targetId: string, en
       return { state: { ...state, turn: spent, lastRoll }, events: lockEvents };
     }
     return {
-      state: { ...state, turn: spent, lastRoll, interactables: { ...state.interactables, [interactable.id]: { ...interactable, open: true } } },
+      state: {
+        ...state,
+        turn: spent,
+        lastRoll,
+        interactables: { ...state.interactables, [interactable.id]: { ...interactable, open: true } },
+      },
       events: [...lockEvents, { t: 'doorToggled', open: true }],
     };
   }
 
+  // Other PC tokens (greet)
+  const targetToken = state.tokens[targetId];
   if (targetToken) {
     if (targetToken.id === actor.id) return reject(state, 'You cannot interact with yourself.');
-    if (targetToken.kind === 'enemy') {
-      const character = state.characters[actor.id];
-      if (!character) return reject(state, 'Only characters can fight.');
-      const classDef = getClass(character.classId);
-      if (!classDef) return reject(state, 'Your class is unknown.');
-      const def = targetToken.enemyId ? getEnemy(targetToken.enemyId) : undefined;
-      // Offense scales off the class's primary ability; DEX shrugs off blows, MAG wards spells.
-      const party = partyCombatant(
-        actor,
-        abilityMod(character.abilities[classDef.primary]),
-        abilityMod(character.abilities.dex),
-        abilityMod(character.abilities.mag),
-        classDef.moves,
-      );
-      const foe = foeCombatant(
-        targetToken,
-        targetToken.attack ?? def?.attack ?? 1,
-        targetToken.armor ?? def?.armor ?? 0,
-        targetToken.magicResist ?? def?.magicResist ?? 0,
-      );
-      const seed = (Math.floor(entropy * 0x7fffffff) ^ 0x51ed270b) >>> 0;
-      return {
-        state: { ...state, turn: spent, battle: startBattle([party, foe], seed) },
-        events: [{ t: 'battleStarted', foe: targetToken.name }],
-      };
-    }
+    if (chebyshev(actor.coord, targetToken.coord) > 1) return reject(state, 'You are too far away.');
     return { state: { ...state, turn: spent }, events: [{ t: 'greeted', from: actor.name, to: targetToken.name }] };
   }
 
   return reject(state, 'There is nothing there to interact with.');
-}
-
-function battleOutcomeText(battle: Battle): string {
-  if (battle.fled) return 'The party fled the battle.';
-  if (battle.winner === 'party') return 'The party won the battle!';
-  if (battle.winner === 'foe') return 'The party was defeated.';
-  return 'The battle ended.';
-}
-
-/** On dismiss: sync combatant HP back to grid tokens; remove defeated foes. */
-function applyBattleResults(state: GameState, battle: Battle): GameState {
-  const tokens = { ...state.tokens };
-  let initiative = state.initiative;
-  for (const c of Object.values(battle.combatants)) {
-    const token = tokens[c.tokenId];
-    if (!token) continue;
-    if (c.side === 'foe' && c.hp <= 0) {
-      delete tokens[c.tokenId];
-      if (initiative) initiative = removeFromInitiative(initiative, c.tokenId);
-    } else {
-      tokens[c.tokenId] = { ...token, hp: c.hp };
-    }
-  }
-  return { ...state, tokens, initiative, battle: null };
 }
 
 /** Create one PC token per character, spread across the map's spawn points. */
@@ -577,8 +557,7 @@ function spawnPartyTokens(
 /**
  * Not a command — the server calls this when a connection drops. We KEEP the
  * player (and their character/token/role) and just mark them offline, so a
- * refresh or brief network blip lets them reconnect as themselves. Explicit
- * departures go through the `leave` command / `removePlayer`.
+ * refresh or brief network blip lets them reconnect as themselves.
  */
 export function markOffline(state: GameState, id: PlayerId): ReduceResult {
   const player = state.players[id];
@@ -591,14 +570,13 @@ export function markOffline(state: GameState, id: PlayerId): ReduceResult {
 
 /**
  * Fully remove a player (they pressed Leave). Drops their character/token,
- * prunes the turn order, abandons a battle they were in, and hands the GM role
- * to a remaining (preferably connected) player so the game can continue.
+ * prunes the turn order, and hands the GM role to a remaining player.
  */
 export function removePlayer(state: GameState, id: PlayerId): ReduceResult {
   const leaving = state.players[id];
   if (!leaving) return { state, events: [] };
 
-  const players: Record<PlayerId, Player> = { ...state.players };
+  const players: Record<string, Player> = { ...state.players };
   delete players[id];
 
   const characters = { ...state.characters };
@@ -609,10 +587,9 @@ export function removePlayer(state: GameState, id: PlayerId): ReduceResult {
 
   const initiative = state.initiative ? removeFromInitiative(state.initiative, id) : null;
 
-  const battle =
-    state.battle && Object.values(state.battle.combatants).some((c) => c.tokenId === id || c.controllerId === id)
-      ? null
-      : state.battle;
+  // If the leaving player had a pending interaction, clear it
+  const pendingInteraction =
+    state.pendingInteraction?.playerId === id ? null : state.pendingInteraction;
 
   let gmId = state.gmId;
   if (gmId === id) {
@@ -626,7 +603,7 @@ export function removePlayer(state: GameState, id: PlayerId): ReduceResult {
   }
 
   return {
-    state: { ...state, players, characters, tokens, initiative, battle, gmId },
+    state: { ...state, players, characters, tokens, initiative, pendingInteraction, gmId },
     events: [{ t: 'playerLeft', name: leaving.name }],
   };
 }

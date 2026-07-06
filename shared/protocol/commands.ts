@@ -26,6 +26,8 @@ const CharacterDraftSchema = z.object({
   baseAbilities: AbilitiesSchema,
 });
 
+const CoordSchema = z.object({ x: z.number().int(), y: z.number().int() });
+
 export const CommandSchema = z.discriminatedUnion('t', [
   z.object({ t: z.literal('join'), name: z.string().trim().min(1).max(24) }),
   z.object({ t: z.literal('leave') }),
@@ -33,29 +35,47 @@ export const CommandSchema = z.discriminatedUnion('t', [
   z.object({ t: z.literal('createCharacter'), draft: CharacterDraftSchema }),
   z.object({ t: z.literal('gm/selectWorld'), worldType: z.string(), seed: z.number().int() }),
   z.object({ t: z.literal('gm/startGame') }),
-  z.object({
-    t: z.literal('moveToken'),
-    tokenId: z.string(),
-    to: z.object({ x: z.number().int(), y: z.number().int() }),
-  }),
+  z.object({ t: z.literal('moveToken'), tokenId: z.string(), to: CoordSchema }),
   z.object({ t: z.literal('endTurn') }),
   z.object({ t: z.literal('interact'), targetId: z.string() }),
-  z.object({ t: z.literal('battle/chooseMove'), moveId: z.string() }),
-  z.object({ t: z.literal('battle/dismiss') }),
   z.object({ t: z.literal('gm/rollDice'), sides: z.union([z.literal(6), z.literal(12), z.literal(20)]) }),
   z.object({ t: z.literal('gm/setHp'), tokenId: z.string(), hp: z.number() }),
   z.object({ t: z.literal('gm/applyStatus'), tokenId: z.string(), status: z.string() }),
   z.object({ t: z.literal('gm/removeStatus'), tokenId: z.string(), status: z.string() }),
-  z.object({
-    t: z.literal('gm/spawnEnemy'),
-    enemyId: z.string(),
-    tokenId: z.string(),
-    at: z.object({ x: z.number().int(), y: z.number().int() }),
-    tier: z.enum(['weak', 'normal', 'elite', 'boss']).optional(),
-  }),
-  z.object({ t: z.literal('gm/removeToken'), tokenId: z.string() }),
   z.object({ t: z.literal('gm/giveItem'), charId: z.string(), itemId: z.string() }),
   z.object({ t: z.literal('gm/advancePhase') }),
+  z.object({
+    t: z.literal('gm/placeObject'),
+    id: z.string(),
+    sprite: z.string(),
+    label: z.string().trim().min(1).max(40),
+    at: CoordSchema,
+    blocksMovement: z.boolean(),
+    collectible: z.boolean(),
+    description: z.string().max(300).default(''),
+    statusEffects: z.object({
+      apply: z.array(z.string()),
+      remove: z.array(z.string()),
+    }).default({ apply: [], remove: [] }),
+  }),
+  z.object({ t: z.literal('gm/removeObject'), id: z.string() }),
+  z.object({
+    t: z.literal('gm/editObject'),
+    id: z.string(),
+    label: z.string().trim().min(1).max(40),
+    blocksMovement: z.boolean(),
+    collectible: z.boolean(),
+    description: z.string().max(300),
+    statusEffects: z.object({
+      apply: z.array(z.string()),
+      remove: z.array(z.string()),
+    }),
+  }),
+  z.object({
+    t: z.literal('gm/narrateObject'),
+    text: z.string().max(500),
+    collect: z.boolean(),
+  }),
 ]);
 
 export type Command = z.infer<typeof CommandSchema>;
