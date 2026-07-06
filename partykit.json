@@ -1,0 +1,6 @@
+{
+  "$schema": "https://www.partykit.io/schema.json",
+  "name": "dnd-online",
+  "main": "party/game-room.ts",
+  "compatibilityDate": "2025-01-01"
+}
