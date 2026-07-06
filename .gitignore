@@ -1,0 +1,9 @@
+node_modules
+dist
+.partykit
+*.local
+.env
+.DS_Store
+
+# Personal, per-machine Claude Code settings (share .claude/settings.json instead)
+.claude/settings.local.json
